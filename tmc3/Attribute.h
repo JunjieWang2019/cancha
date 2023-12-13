@@ -42,6 +42,7 @@
 #include "PCCPointSet.h"
 #include "PCCTMC3Common.h"
 #include "entropy.h"
+#include "AttributeCommon.h"
 
 namespace pcc {
 
@@ -65,14 +66,18 @@ public:
     const char* payload,
     size_t payloadLen,
     AttributeContexts& ctxtMem,
-    PCCPointSet3& pointCloud, 
-    AttributeInterPredParams& attrInterPredParams
-    ) = 0;
+    PCCPointSet3& pointCloud,
+    AttributeInterPredParams& attrInterPredParams,
+    AttributeGranularitySlicingParam& slicingParam) = 0;
 
   // Indicates if the attribute decoder can decode the given aps
   virtual bool isReusable(
     const AttributeParameterSet& aps,
     const AttributeBrickHeader& abh) const = 0;
+  
+  virtual AttributeLods& getLods() = 0;
+  virtual std::vector<uint32_t>& getIndexes() = 0;
+  virtual std::vector<uint32_t>& pointIndexToPredictorIndex() = 0;
 };
 
 //----------------------------------------------------------------------------
@@ -92,14 +97,18 @@ public:
     AttributeBrickHeader& abh,
     AttributeContexts& ctxtMem,
     PCCPointSet3& pointCloud,
-    PayloadBuffer* payload, 
-    AttributeInterPredParams &attrInterPredParams
-  ) = 0;
+    PayloadBuffer* payload,
+    AttributeInterPredParams &attrInterPredParams,
+    AttributeGranularitySlicingParam& slicingParam) = 0;
 
   // Indicates if the attribute decoder can decode the given aps
   virtual bool isReusable(
     const AttributeParameterSet& aps,
     const AttributeBrickHeader& abh) const = 0;
+
+  virtual AttributeLods& getLods() = 0;
+  virtual std::vector<uint32_t>& getIndexes() = 0;
+  virtual std::vector<uint32_t>& pointIndexToPredictorIndex() = 0;
 };
 
 //----------------------------------------------------------------------------

@@ -38,6 +38,7 @@
 #include <algorithm>
 #include <cassert>
 #include <string>
+#include <sstream>
 
 #include "AttributeCommon.h"
 #include "PayloadBuffer.h"
@@ -149,6 +150,7 @@ PCCTMC3Decoder3::outputCurrentCloud(PCCTMC3Decoder3::Callbacks* callback)
     return;
 
   std::swap(_outCloud.cloud, _accumCloud);
+
 
   // Apply global scaling to output for integer conformance
   // todo: add other output scaling modes
@@ -319,6 +321,14 @@ PCCTMC3Decoder3::decompress(
     if (_gps->biPredictionEnabledFlag)
       outputGOFCurrentCloud(callback);
     else{ 
+      if(_sps->layer_group_enabled_flag){  
+        _gHandler.releaseNodes();
+        _gHandler.releaseCtxForGeometry();
+        _gHandler.releaseCtxForAttribute();
+        _gHandler.releaseIndexes();
+
+        _subgroupPointCloud.clear();      
+      }
       compensateZ();
       outputCurrentCloud(callback);
     }
@@ -334,6 +344,16 @@ PCCTMC3Decoder3::decompress(
       storeCurrentCloudAsBRef();
       outputGOFCurrentCloud(callback);
     } else {
+
+      if(_sps->layer_group_enabled_flag){  
+        _gHandler.releaseNodes();
+        _gHandler.releaseCtxForGeometry();
+        _gHandler.releaseCtxForAttribute();
+        _gHandler.releaseIndexes();
+
+        _subgroupPointCloud.clear();      
+      }
+
       storeCurrentCloudAsRef();
       compensateZ();
       outputCurrentCloud(callback);
@@ -418,6 +438,17 @@ PCCTMC3Decoder3::decompress(
   }
 
   case PayloadType::kUserData: parseUserData(*buf); return 0;
+
+  case PayloadType::kDependentGeometryDataUnit:
+    return decodeDependentGeometryBrick(*buf);
+
+  case PayloadType::kDependentAttributeDataUnit:
+    decodeDependentAttributeBrick(*buf);
+    return 0;
+
+  case PayloadType::kLayerGroupStructureInventory:
+	  storeLayerGroupStructureInventory(parseLayerGroupStructureInventory(*buf));
+	  return 0;
   }
 
   // todo(df): error, unhandled payload type
@@ -458,6 +489,15 @@ PCCTMC3Decoder3::storeTileInventory(TileInventory&& inventory)
 {
   // todo(df): handle replacement semantics
   _tileInventory = inventory;
+}
+
+//==========================================================================
+
+void
+PCCTMC3Decoder3::storeLayerGroupStructureInventory(
+	LayerGroupStructureInventory&& inventory)
+{
+	_layerGroupStructureInventory = inventory;
 }
 
 //==========================================================================
@@ -737,9 +777,45 @@ PCCTMC3Decoder3::decodeGeometryBrick(const PayloadBuffer& buf)
       *_ctxtMemPredGeom, aec);
   } else if (!_gps->trisoup_enabled_flag) {
     if (!_params.minGeomNodeSizeLog2) {
-      decodeGeometryOctree(
-        *_gps, _gbh, _currentPointCloud, *_ctxtMemOctreeGeom, aec, _refFrame,
-        biPredDecodeParams.refPointCloud2, _sps->seqBoundingBoxOrigin);
+		if (_sps->layer_group_enabled_flag) {
+      
+      _gHandler = LayerGroupHandler(*_sps);     
+
+      _gHandler.initializeForGeometry(_layerGroupStructureInventory,_sliceId,_params.numSkipLayerGroups, false);
+
+      _subgroupPointCloud.resize(1);
+      _subgroupPointCloud[0].addRemoveAttributes(_currentPointCloud.hasColors(), _currentPointCloud.hasReflectances());    
+      
+
+      int curArrayIdx = 0;
+			_gHandler.resetStoredCtxForGeometry(curArrayIdx);
+
+      
+      GeometryGranularitySlicingParam slicingParam;
+      _gHandler.setSlicingParamGeom(curArrayIdx,_gbh,slicingParam);
+
+
+			decodeGeometryOctreeGranularitySlicing(
+				*_gps, _gbh, _currentPointCloud, *_gHandler._ctxtMemSaved[curArrayIdx].get(), aec, _gHandler._nodesSaved[curArrayIdx].get(),slicingParam);
+      
+      std::swap(_currentPointCloud,_subgroupPointCloud[0]);
+
+      
+      _gHandler.storeSlicingParamGeom(curArrayIdx,slicingParam);      
+      _gHandler.setStartIdxForEachOutputPoints(0, 0);
+      _currentPointCloud.append(_gHandler.getOutputPoints(_currentPointCloud.hasColors(), _currentPointCloud.hasReflectances(), curArrayIdx, _subgroupPointCloud[0]));
+
+			auto rootBboxSize = slicingParam.bboxMax - slicingParam.bboxMin;
+      _gHandler.setBox(curArrayIdx, Vec3<int>{0,0,0}, rootBboxSize);      
+      _gHandler.setRoi(_params.roiEnabledFlag, _params.roiPointScale,_params.roiSize);
+
+      _gHandler.releaseGeometryDecoderResource(curArrayIdx, true, _gbh.numSubsequentSubgroups);
+
+		}
+		else
+		  decodeGeometryOctree(
+			*_gps, _gbh, _currentPointCloud, *_ctxtMemOctreeGeom, aec, _refFrame,
+			biPredDecodeParams.refPointCloud2, _sps->seqBoundingBoxOrigin);
     } else {
       decodeGeometryOctreeScalable(
         *_gps, _gbh, _params.minGeomNodeSizeLog2, _currentPointCloud,
@@ -783,6 +859,146 @@ PCCTMC3Decoder3::decodeGeometryBrick(const PayloadBuffer& buf)
   std::cout << std::endl;
 
   return 0;
+}
+
+//--------------------------------------------------------------------------
+
+int
+PCCTMC3Decoder3::decodeDependentGeometryBrick(const PayloadBuffer& buf)
+{
+	assert(buf.type == PayloadType::kDependentGeometryDataUnit);
+	std::cout << "positions bitstream size " << buf.size() << " B\n";
+
+	// todo(df): replace with attribute mapping
+	bool hasColour = std::any_of(
+		_sps->attributeSets.begin(), _sps->attributeSets.end(),
+		[](const AttributeDescription& desc) {
+		return desc.attributeLabel == KnownAttributeLabel::kColour;
+	});
+
+	bool hasReflectance = std::any_of(
+		_sps->attributeSets.begin(), _sps->attributeSets.end(),
+		[](const AttributeDescription& desc) {
+		return desc.attributeLabel == KnownAttributeLabel::kReflectance;
+	});
+
+	PCCPointSet3 tmpPoints;
+	tmpPoints.clear();
+	tmpPoints.addRemoveAttributes(hasColour, hasReflectance);
+
+	pcc::chrono::Stopwatch<pcc::chrono::utime_inc_children_clock> clock_user;
+	clock_user.start();
+
+	int gbhSize, gbfSize;
+	_dep_gbh = parseDepGbh(*_sps, *_gps, _gbh, buf, &gbhSize, &gbfSize);
+
+	if (_dep_gbh.layer_group_id > _sps->num_layer_groups_minus1 - _params.numSkipLayerGroups) {
+		return 0;
+	}
+
+	bool isOutputLayerGroup = false;
+	if (_dep_gbh.layer_group_id == _sps->num_layer_groups_minus1 - _params.numSkipLayerGroups)
+		isOutputLayerGroup = true;
+
+  
+	
+
+  bool isRequiredLayer = _gHandler.isRequiredLayer(_dep_gbh.layer_group_id) ;
+  bool isRequiredDataunit = ( !_sps->subgroup_enabled_flag[_dep_gbh.layer_group_id] ||
+      _gHandler.checkRoi(_dep_gbh.subgroupBboxOrigin, _dep_gbh.subgroupBboxSize) );
+
+  if(!(isRequiredLayer && isRequiredDataunit)){
+    return 0;
+  }
+
+
+	// set default attribute values (in case an attribute data unit is lost)
+	// NB: it is a requirement that geom_num_points_minus1 is correct
+	tmpPoints.resize(_dep_gbh.footer.geom_num_points_minus1 + 1);
+
+	if (hasColour) {
+		auto it = std::find_if(
+			_outCloud.attrDesc.cbegin(), _outCloud.attrDesc.cend(),
+			[](const AttributeDescription& desc) {
+			return desc.attributeLabel == KnownAttributeLabel::kColour;
+		});
+
+		Vec3<attr_t> defAttrVal = 1 << (it->bitdepth - 1);
+		if (!it->params.attr_default_value.empty())
+			for (int k = 0; k < 3; k++)
+				defAttrVal[k] = it->params.attr_default_value[k];
+		for (int i = 0; i < tmpPoints.getPointCount(); i++)
+			tmpPoints.setColor(i, defAttrVal);
+	}
+
+	if (hasReflectance) {
+		auto it = std::find_if(
+			_outCloud.attrDesc.cbegin(), _outCloud.attrDesc.cend(),
+			[](const AttributeDescription& desc) {
+			return desc.attributeLabel == KnownAttributeLabel::kReflectance;
+		});
+		attr_t defAttrVal = 1 << (it->bitdepth - 1);
+		if (!it->params.attr_default_value.empty())
+			defAttrVal = it->params.attr_default_value[0];
+		for (int i = 0; i < tmpPoints.getPointCount(); i++)
+			tmpPoints.setReflectance(i, defAttrVal);
+	}
+
+  
+  
+	Vec3<int> bboxMin = { 0, 0, 0 };
+	Vec3<int> bboxMax = _gHandler.getRootBoxSize();
+  if (_sps->subgroup_enabled_flag[_dep_gbh.layer_group_id]) {
+		bboxMin = _dep_gbh.subgroupBboxOrigin;
+		bboxMax = bboxMin + _dep_gbh.subgroupBboxSize;  
+  }
+  _gHandler.setNewDependentUnit(_dep_gbh.layer_group_id, _dep_gbh.subgroup_id, _dep_gbh.ref_layer_group_id, _dep_gbh.ref_subgroup_id,bboxMin,bboxMax);
+  
+  int curArrayIdx = _gHandler.getArrayId(_dep_gbh.layer_group_id, _dep_gbh.subgroup_id);
+	int refArrayIdx4Context = _gHandler.getReferenceIdx(curArrayIdx);
+	int refArrayIdx4Parent = _gHandler.getParentIdx(curArrayIdx);
+  
+
+  if(_subgroupPointCloud.size()<curArrayIdx+1)
+    _subgroupPointCloud.resize(curArrayIdx+1);
+
+	_gHandler.resetStoredCtxForGeometry(curArrayIdx);
+	_gHandler.loadCtxForGeometry(curArrayIdx, refArrayIdx4Context);
+  
+  
+  GeometryGranularitySlicingParam slicingParam;  
+  _gHandler.setSlicingParamGeom(curArrayIdx,refArrayIdx4Parent, _dep_gbh,slicingParam);
+  
+	EntropyDecoder aec;
+	aec.setBuffer(buf.size() - gbhSize - gbfSize, buf.data() + gbhSize);
+	aec.enableBypassStream(_sps->cabac_bypass_stream_enabled_flag);
+	aec.setBypassBinCodingWithoutProbUpdate(_sps->bypass_bin_coding_without_prob_update);
+	aec.start();
+
+	decodeGeometryOctreeGranularitySlicing(
+		*_gps, _gbh, tmpPoints, *_gHandler._ctxtMemSaved[curArrayIdx].get(), aec, _gHandler._nodesSaved[curArrayIdx].get(),slicingParam);
+  
+  
+  std::swap(_subgroupPointCloud[curArrayIdx],tmpPoints);
+  
+  _gHandler.storeSlicingParamGeom(curArrayIdx,slicingParam);
+  
+  _gHandler.setStartIdxForEachOutputPoints(curArrayIdx, _currentPointCloud.getPointCount());
+  _currentPointCloud.append(_gHandler.getOutputPoints(_currentPointCloud.hasColors(), _currentPointCloud.hasReflectances(), curArrayIdx, _subgroupPointCloud[curArrayIdx]));
+
+  
+  _gHandler.releaseGeometryDecoderResource(curArrayIdx, true, _dep_gbh.numSubsequentSubgroups);
+
+
+
+	clock_user.stop();
+
+	auto total_user =
+		std::chrono::duration_cast<std::chrono::milliseconds>(clock_user.count());
+	std::cout << "positions processing time (user): "
+		<< total_user.count() / 1000.0 << " s\n";
+	std::cout << std::endl;
+	return 0;
 }
 
 //--------------------------------------------------------------------------
@@ -872,21 +1088,77 @@ PCCTMC3Decoder3::decodeAttributeBrick(const PayloadBuffer& buf)
 
   pcc::chrono::Stopwatch<pcc::chrono::utime_inc_children_clock> clock_user;
 
+  int curArrayIdx = 0;
+  if (_sps->layer_group_enabled_flag && attr_aps.layer_group_enabled_flag) {
+
+  // savedNode could be released because 
+  // point cloud information for attribute decoding were stored as _subgroupPointCloud
+  // The context tables of geometry also could be released but they are remained for fair comparison with the alternative contribution
+    _gHandler.releaseCtxForGeometry();
+    _gHandler.releaseNodes();
+
+    curArrayIdx = _gHandler.getArrayId(0,0);
+
+    
+    if( !_attrDecoder ){
+      
+      int numAttr = _sps->attributeSets.size();
+      _gHandler.initializeForAttribute(numAttr, false);
+
+      _abh.clear();
+      _abh.resize(numAttr);
+
+      _codingtime.clear();
+      _codingtime.resize(numAttr);
+
+    }
+
+    _gHandler.buildLoDSettings(attr_aps, abh.attr_sps_attr_idx);
+
+
+  } 
+
+  
   // replace the attribute decoder if not compatible
-  if (!_attrDecoder || !_attrDecoder->isReusable(attr_aps, abh))
+  if (!_attrDecoder || !_attrDecoder->isReusable(attr_aps, abh) || _prevArrayIdx != curArrayIdx ){
     _attrDecoder = makeAttributeDecoder();
+  
+  }
 
   clock_user.start();
 
-  // Convert cartesian positions to spherical for use in attribute coding.
-  // NB: this retains the original cartesian positions to restore afterwards
-  std::vector<pcc::point_t> altPositions;
-  if (attr_aps.spherical_coord_flag) {
-    // If predgeom was used, re-use the internal positions rather than
-    // calculating afresh.
-    Box3<int> bboxRpl;
 
-    pcc::point_t minPos = 0;
+  if(_sps->layer_group_enabled_flag && attr_aps.layer_group_enabled_flag){
+    
+    _gHandler.resetStoredCtxForAttribute(abh.attr_sps_attr_idx,curArrayIdx);
+    
+
+    AttributeGranularitySlicingParam slicingParam;
+    _gHandler.setSlicingParamAttr(abh.attr_sps_attr_idx, 0, nullptr, nullptr, abh.subgroup_weight_adjustment_enabled_flag, 0, nullptr, nullptr, slicingParam);
+
+    _attrDecoder->decode(
+      *_sps, attr_sps, attr_aps, abh, 
+      _gbh.footer.geom_num_points_minus1,
+      _gHandler.getMinNodeSize(abh.attr_sps_attr_idx, 0), buf.data() + abhSize, buf.size() - abhSize,
+      *_gHandler._ctxtMemAttrsSaved[abh.attr_sps_attr_idx][curArrayIdx], 
+      _subgroupPointCloud[curArrayIdx],
+      attrInterPredParams,slicingParam);
+    
+    _abh[abh.attr_sps_attr_idx] = abh;
+    _prevArrayIdx = curArrayIdx;
+    
+
+  }
+  else{
+      // Convert cartesian positions to spherical for use in attribute coding.
+    // NB: this retains the original cartesian positions to restore afterwards
+    std::vector<pcc::point_t> altPositions;
+    if (attr_aps.spherical_coord_flag) {
+      // If predgeom was used, re-use the internal positions rather than
+      // calculating afresh.
+      Box3<int> bboxRpl;
+
+      pcc::point_t minPos = 0;
 
     if (_gps->predgeom_enabled_flag) {
       altPositions = _posSph;
@@ -960,11 +1232,12 @@ PCCTMC3Decoder3::decodeAttributeBrick(const PayloadBuffer& buf)
       }
 
   auto& ctxtMemAttr = _ctxtMemAttrs.at(abh.attr_sps_attr_idx);
+  AttributeGranularitySlicingParam slicingParam;
   _attrDecoder->decode(
     *_sps, attr_sps, attr_aps, abh, _gbh.footer.geom_num_points_minus1,
     _params.minGeomNodeSizeLog2, buf.data() + abhSize, buf.size() - abhSize,
     ctxtMemAttr, _currentPointCloud
-    , attrInterPredParams);
+    , attrInterPredParams,slicingParam);
 
   if (attr_aps.spherical_coord_flag && _gps->predgeom_enabled_flag)
     _accumCloudAltPositions.append(_currentPointCloud, _posSph);
@@ -990,9 +1263,143 @@ PCCTMC3Decoder3::decodeAttributeBrick(const PayloadBuffer& buf)
     for (auto i = 0; i < _currentPointCloud.getPointCount(); i++)
       _currentPointCloud[i] -= _sliceOrigin;
 
+  }
+
   // Note the current sliceID for loss detection
   _ctxtMemAttrSliceIds[abh.attr_sps_attr_idx] = _sliceId;
 
+  if (_sps->layer_group_enabled_flag && attr_aps.layer_group_enabled_flag) {
+
+    assert(_gHandler.isRequiredLayer(0));
+
+    _gHandler.setDecodedAttribute(curArrayIdx,_currentPointCloud,_subgroupPointCloud[curArrayIdx],attr_sps.attr_num_dimensions_minus1 == 2, attr_sps.attr_num_dimensions_minus1 == 0);
+
+    
+    _gHandler.releaseAttributeDecoderResource(
+      abh.attr_sps_attr_idx,
+      curArrayIdx,
+      true,
+      attr_aps.attr_ref_id_present_flag,
+      _subgroupPointCloud);
+  }
+
+  clock_user.stop();
+
+  std::cout << label << "s bitstream size " << buf.size() << " B\n";
+
+  auto total_user =
+    std::chrono::duration_cast<std::chrono::milliseconds>(clock_user.count());
+  std::cout << label
+            << "s processing time (user): " << total_user.count() / 1000.0
+            << " s\n";
+  
+  if (_sps->layer_group_enabled_flag && attr_aps.layer_group_enabled_flag)
+    _codingtime[abh.attr_sps_attr_idx] = total_user.count()/1000.0;
+}
+
+//--------------------------------------------------------------------------
+
+void
+PCCTMC3Decoder3::decodeDependentAttributeBrick(const PayloadBuffer& buf)
+{
+  assert(buf.type == PayloadType::kDependentAttributeDataUnit);
+  // todo(df): replace assertions with error handling
+  assert(_sps);
+  assert(_gps);
+
+  // verify that this corresponds to the correct geometry slice
+  DependentAttributeDataUnitHeader dep_abh = parseDepAbhIds(buf);
+  assert(dep_abh.attr_geom_slice_id == _sliceId);
+
+  // todo(df): validate that sps activation is not changed via the APS
+  const auto it_attr_aps = _apss.find(dep_abh.attr_attr_parameter_set_id);
+
+  assert(it_attr_aps != _apss.cend());
+  const auto& attr_aps = it_attr_aps->second;
+
+  assert(dep_abh.attr_sps_attr_idx < _sps->attributeSets.size());
+  const auto& attr_sps = _sps->attributeSets[dep_abh.attr_sps_attr_idx];
+  const auto& label = attr_sps.attributeLabel;
+  
+  assert(_sps->layer_group_enabled_flag);
+  assert(attr_aps.layer_group_enabled_flag);
+
+
+  // In order to determinet hat the attribute decoder is reusable, the abh
+  // must be inspected.
+  int abhSize;
+  dep_abh = parseDepAbh(*_sps, attr_aps, buf, &abhSize);
+
+  PCCPointSet3 tmpPoints;
+  
+  //Check corresponding geometry brick exsisting
+  if(!_gHandler.hasCorrespondingGeometry(dep_abh.layer_group_id, dep_abh.subgroup_id))
+    return;
+  if(!_gHandler.isRequiredLayer(dep_abh.layer_group_id))
+    return;
+  
+  
+  //todo: inherit required&output flag of subgroups from geometry
+
+  auto abh = _abh[dep_abh.attr_sps_attr_idx];
+  
+  int curArrayIdx = _gHandler.getArrayId(dep_abh.layer_group_id, dep_abh.subgroup_id);
+  std::swap(tmpPoints, _subgroupPointCloud[curArrayIdx]);
+  
+  //Get parent information and make parameters for LOD generation
+  int parentArrayIdx = _gHandler.getParentIdx(curArrayIdx);
+  
+  int refArrayIdx;
+  if(attr_aps.attr_ref_id_present_flag){
+    _gHandler.setNewDependentUnitForAttribute(dep_abh.layer_group_id, dep_abh.subgroup_id, dep_abh.ref_layer_group_id, dep_abh.ref_subgroup_id);
+  }
+  refArrayIdx = _gHandler.getReferenceIdxAttribute(curArrayIdx);
+
+  pcc::chrono::Stopwatch<pcc::chrono::utime_inc_children_clock> clock_user;
+
+
+  // replace the attribute decoder if not compatible
+  if (!_attrDecoder || !_attrDecoder->isReusable(attr_aps, abh) || _prevArrayIdx != curArrayIdx){
+    _attrDecoder = makeAttributeDecoder();
+  }
+
+  clock_user.start();
+
+  _gHandler.loadCtxForAttribute(dep_abh.attr_sps_attr_idx,curArrayIdx,refArrayIdx);
+  
+  auto parentPointCloud = _gHandler.getParentPoints(
+    curArrayIdx, parentArrayIdx, _subgroupPointCloud[parentArrayIdx]);
+      
+  AttributeGranularitySlicingParam slicingParam;
+  _gHandler.setSlicingParamAttr(dep_abh.attr_sps_attr_idx, dep_abh.layer_group_id, &dep_abh, &parentPointCloud, dep_abh.subgroup_weight_adjustment_enabled_flag, 0, nullptr, nullptr, slicingParam);
+              
+
+  _attrDecoder->decode(
+    *_sps, attr_sps, attr_aps, abh, tmpPoints.getPointCount()-1,
+    _gHandler.getMinNodeSize(abh.attr_sps_attr_idx,dep_abh.layer_group_id), 
+    buf.data() + abhSize, buf.size() - abhSize,
+    *_gHandler._ctxtMemAttrsSaved[abh.attr_sps_attr_idx][curArrayIdx], tmpPoints,
+    attrInterPredParams,slicingParam);
+    
+
+  
+  _prevArrayIdx = curArrayIdx;
+  std::swap(_subgroupPointCloud[curArrayIdx], tmpPoints);
+
+  
+  assert(_gHandler.isRequiredLayer(dep_abh.layer_group_id));
+
+  _gHandler.setDecodedAttribute(curArrayIdx,_currentPointCloud,_subgroupPointCloud[curArrayIdx],attr_sps.attr_num_dimensions_minus1 == 2, attr_sps.attr_num_dimensions_minus1 == 0);
+
+
+  _gHandler.releaseAttributeDecoderResource(
+    abh.attr_sps_attr_idx,
+    curArrayIdx,
+    dep_abh.context_reference_indication_flag,
+    attr_aps.attr_ref_id_present_flag,
+    _subgroupPointCloud);
+
+  
   clock_user.stop();
 
   std::cout << label << "s bitstream size " << buf.size() << " B\n";

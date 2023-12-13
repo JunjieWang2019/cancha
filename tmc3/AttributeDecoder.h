@@ -65,12 +65,16 @@ public:
     size_t payloadLen,
     AttributeContexts& ctxtMem,
     PCCPointSet3& pointCloud, 
-    AttributeInterPredParams& attrInterPredParams
-  ) override;
+    AttributeInterPredParams& attrInterPredParams,
+    AttributeGranularitySlicingParam &slicingParam) override;
 
   bool isReusable(
     const AttributeParameterSet& aps,
     const AttributeBrickHeader& abh) const override;
+  
+  AttributeLods& getLods() override;
+  std::vector<uint32_t>& getIndexes() override;
+  std::vector<uint32_t>& pointIndexToPredictorIndex() override;
 
 protected:
   // todo(df): consider alternative encapsulation
@@ -84,7 +88,8 @@ protected:
     int minGeomNodeSizeLog2,
     PCCResidualsDecoder& decoder,
     PCCPointSet3& pointCloud,
-    const AttributeInterPredParams& attrInterPredParams);
+    const AttributeInterPredParams& attrInterPredParams,
+    AttributeGranularitySlicingParam &slicingParam);
 
   void decodeColorsLift(
     const AttributeDescription& desc,
@@ -94,7 +99,8 @@ protected:
     int geom_num_points_minus1,
     int minGeomNodeSizeLog2,
     PCCResidualsDecoder& decoder,
-    PCCPointSet3& pointCloud);
+    PCCPointSet3& pointCloud,
+    AttributeGranularitySlicingParam &slicingParam);
 
   void decodeReflectancesPred(
     const AttributeDescription& desc,
@@ -103,7 +109,8 @@ protected:
     const QpSet& qpSet,
     PCCResidualsDecoder& decoder,
     PCCPointSet3& pointCloud,
-    const AttributeInterPredParams& attrInterPredParams);
+    const AttributeInterPredParams& attrInterPredParams,
+    AttributeGranularitySlicingParam &slicingParam);
 
   void decodeColorsPred(
     const AttributeDescription& desc,
@@ -111,7 +118,8 @@ protected:
     const AttributeBrickHeader& abh,
     const QpSet& qpSet,
     PCCResidualsDecoder& decoder,
-    PCCPointSet3& pointCloud);
+    PCCPointSet3& pointCloud,
+    AttributeGranularitySlicingParam &slicingParam);
 
   void decodeReflectancesRaht(
     const AttributeDescription& desc,
@@ -139,6 +147,7 @@ protected:
 
 private:
   AttributeLods _lods;
+  std::vector<uint32_t> _pointIndexToPredictorIndex;
 };
 
 //============================================================================

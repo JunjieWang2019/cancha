@@ -51,6 +51,7 @@
 #include "partitioning.h"
 #include "pointset_processing.h"
 #include "TMC3.h"
+#include "layerGroupSlicing.h"
 namespace pcc {
 
 //============================================================================
@@ -155,6 +156,28 @@ struct EncoderParams {
 
   // Maximum translation threshold used to disable attr inter pred
   double attrInterPredTranslationThreshold;
+
+  // layer-group slicing
+  bool roiEnabledFlag;
+  Vec3<double> roiPointScale;
+  Vec3<int> roiSize;
+  int numSkipLayerGroups;
+
+  int numLayersInLayerGroup0;
+  int subgroupBboxSize_Cubic;
+
+  bool root_layer_group_context_ref_flag;
+
+  LayerGroupSlicingParams lgsp;
+
+  bool depth1stSubgroupSearch;  
+
+  int qpCoefDependentUnits;
+  int qpLayerCoefDependentUnits;
+  
+  bool weight_adjustment_enabled_flag;
+  
+  int weight_adjustment_method;
 };
 
 //============================================================================
@@ -224,7 +247,8 @@ public:
 private:
   void appendSlice(PCCPointSet3& cloud);
 
-  void encodeGeometryBrick(const EncoderParams*, PayloadBuffer* buf);
+  void encodeGeometryBrick(const EncoderParams* params,
+	  std::vector<PayloadBuffer>* bufs, LayerGroupSlicingParams& layerGroupParams);
 
   SrcMappedPointSet quantization(const PCCPointSet3& src);
 
@@ -280,6 +304,10 @@ private:
   // Current frame number.
   // NB: only the log2_max_frame_ctr LSBs are sampled for frame_ctr
   int _frameCounter;
+
+  // layer-group slicing
+  LayerGroupHandler _gHandler;
+  std::vector<std::vector<PCCPointSet3>> _subgroupPointCloud;
 
   // Memorized context buffers
   std::unique_ptr<GeometryOctreeContexts> _ctxtMemOctreeGeom;

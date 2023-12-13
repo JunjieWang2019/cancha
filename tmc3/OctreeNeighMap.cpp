@@ -86,7 +86,12 @@ updateGeometryOccupancyAtlas(
   const pcc::ringbuf<PCCOctree3Node>& fifo,
   const pcc::ringbuf<PCCOctree3Node>::iterator& fifoCurrLvlEnd,
   MortonMap3D* occupancyAtlas,
-  Vec3<int32_t>* atlasOrigin)
+  Vec3<int32_t>* atlasOrigin,
+  Vec3<int> curPos_bbox_min,
+  Vec3<int> curPos_bbox_max,
+  Vec3<int> nodeSizeLog2,
+  bool bboxChangedFlag)
+
 {
   const uint32_t mask = (1 << occupancyAtlas->cubeSizeLog2()) - 1;
   const int shift = occupancyAtlas->cubeSizeLog2();
@@ -99,11 +104,16 @@ updateGeometryOccupancyAtlas(
   // only refresh the atlas if the current position lies outside the
   // the current atlas.
   if (*atlasOrigin == currentOrigin) {
+	  if (bboxChangedFlag) {
+		  occupancyAtlas->setRange(curPos_bbox_max, curPos_bbox_min, *atlasOrigin, nodeSizeLog2);
+	  }
     return;
   }
 
   *atlasOrigin = currentOrigin;
   occupancyAtlas->clearUpdates();
+
+  occupancyAtlas->setRange(curPos_bbox_max, curPos_bbox_min, *atlasOrigin, nodeSizeLog2);
 
   for (auto it = fifo.begin(); it != fifoCurrLvlEnd; ++it) {
     if (currentOrigin != it->pos >> shift)
@@ -188,8 +198,9 @@ makeGeometryNeighPattern(
   const int sz = codedAxesPrevLvl & 1 ? 1 : 0;
 
   if (
-    x > 0 && x < cubeSizeMinusOne && y > 0 && y < cubeSizeMinusOne && z > 0
-    && z < cubeSizeMinusOne) {
+	  x > occupancyAtlas._minRange[0] && x < occupancyAtlas._maxRange[0] - 1
+	  && y > occupancyAtlas._minRange[1] && y < occupancyAtlas._maxRange[1] - 1
+	  && z > occupancyAtlas._minRange[2] && z < occupancyAtlas._maxRange[2] - 1) {
     neighPattern = occupancyAtlas.get(x + 1, y, z, sx, sy, sz);
     neighPattern |= occupancyAtlas.get(x - 1, y, z, sx, sy, sz) << 1;
     neighPattern |= occupancyAtlas.get(x, y - 1, z, sx, sy, sz) << 2;
@@ -231,8 +242,9 @@ makeGeometryNeighPattern(
 
   if (planarEligibleKOctreeDepth) {
     if (
-      x > 0 && x < cubeSizeMinusOne && y > 0 && y < cubeSizeMinusOne && z > 0
-      && z < cubeSizeMinusOne) {
+		x > occupancyAtlas._minRange[0] && x < occupancyAtlas._maxRange[0] - 1
+		&& y > occupancyAtlas._minRange[1] && y < occupancyAtlas._maxRange[1] - 1
+		&& z > occupancyAtlas._minRange[2] && z < occupancyAtlas._maxRange[2] - 1) {
       if (occupancyAtlas.get(x - 1, y - 1, z, sx, sy, sz))
         gnp.adjNeighOcc[3] = occupancyAtlas.getChildOcc(x - 1, y - 1, z);
       if (occupancyAtlas.get(x - 1, y, z - 1, sx, sy, sz))
@@ -264,8 +276,9 @@ makeGeometryNeighPattern(
         | (!!(gnp.neighPattern & 8) << 10) | (!!(gnp.neighPattern & 32) << 9);
 
 
-      if (x > 0 && x < cubeSizeMinusOne && y > 0 && y < cubeSizeMinusOne && z > 0
-        && z < cubeSizeMinusOne)
+	  if (x > occupancyAtlas._minRange[0] && x < occupancyAtlas._maxRange[0] - 1
+		  && y > occupancyAtlas._minRange[1] && y < occupancyAtlas._maxRange[1] - 1
+		  && z > occupancyAtlas._minRange[2] && z < occupancyAtlas._maxRange[2] - 1)
         for (int n = 0; n < 9; n++) {
           neighOccu |= occupancyAtlas.get(
             x + LUTLineardx[n], y + LUTLineardy[n], z + LUTLineardz[n], sx, sy, sz) << n;
@@ -314,8 +327,9 @@ void prepareGeometryAdvancedNeighPattern(
 
   // prepare 20 neighbours
   int neighb20 = 0;
-  if (x > 0 && x < cubeSizeMinusOne && y > 0 && y < cubeSizeMinusOne && z > 0
-      && z < cubeSizeMinusOne)
+  if (x > occupancyAtlas._minRange.x() && x < occupancyAtlas._maxRange.x() - 1
+	  && y > occupancyAtlas._minRange.y() && y < occupancyAtlas._maxRange.y() - 1
+	  && z > occupancyAtlas._minRange.z() && z < occupancyAtlas._maxRange.z() - 1)
     for (int n = 0; n < 20; n++)
       neighb20 |= occupancyAtlas.get(
         x + LUTdx[n], y + LUTdy[n], z + LUTdz[n], sx, sy, sz) << n;

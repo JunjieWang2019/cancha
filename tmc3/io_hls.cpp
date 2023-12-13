@@ -469,6 +469,23 @@ write(const SequenceParameterSet& sps)
 
     if (num_attribute_sets > 1)
       bs.write(sps.cross_attr_prediction_enabled_flag);
+      
+    bs.write(sps.layer_group_enabled_flag);
+    if (sps.layer_group_enabled_flag) {
+      bs.writeUe(sps.num_layer_groups_minus1);
+      bool acc_subgroup_enabled_flag = 0;
+      for (int i = 0; i <= sps.num_layer_groups_minus1; i++) {
+        bs.writeUe(sps.layer_group_id[i]);
+        bs.writeUe(sps.num_layers_minus1[i]);
+        bs.write(sps.subgroup_enabled_flag[i]);
+
+        acc_subgroup_enabled_flag |= sps.subgroup_enabled_flag[i];
+      }
+      if (acc_subgroup_enabled_flag) {
+        bs.writeUe(sps.subgroupBboxOrigin_bits_minus1);
+        bs.writeUe(sps.subgroupBboxSize_bits_minus1);
+      }
+    }
   }
 
   bs.byteAlign();
@@ -573,7 +590,8 @@ parseSps(const PayloadBuffer& buf)
   sps.bypass_bin_coding_without_prob_update = false;
   sps.inter_entropy_continuation_enabled_flag = false;
   sps.cross_attr_prediction_enabled_flag = false;
-
+  sps.layer_group_enabled_flag = false;
+  
   bool sps_extension_flag = bs.read();
   if (sps_extension_flag) {
     bs.read(&sps.inter_frame_prediction_enabled_flag);
@@ -583,6 +601,28 @@ parseSps(const PayloadBuffer& buf)
 
     if (num_attribute_sets > 1)
       bs.read(&sps.cross_attr_prediction_enabled_flag);
+	
+    bs.read(&sps.layer_group_enabled_flag);
+    if (sps.layer_group_enabled_flag) {
+      bs.readUe(&sps.num_layer_groups_minus1);
+
+      sps.layer_group_id.resize(sps.num_layer_groups_minus1 + 1);
+      sps.num_layers_minus1.resize(sps.num_layer_groups_minus1 + 1);
+      sps.subgroup_enabled_flag.resize(sps.num_layer_groups_minus1 + 1);
+      bool acc_subgroup_enabled_flag = 0;
+
+      for (int i = 0; i <= sps.num_layer_groups_minus1; i++) {
+        bs.readUe(&sps.layer_group_id[i]);
+        bs.readUe(&sps.num_layers_minus1[i]);
+        sps.subgroup_enabled_flag[i] = bs.read();
+
+        acc_subgroup_enabled_flag |= sps.subgroup_enabled_flag[i];
+      }
+      if (acc_subgroup_enabled_flag) {
+        bs.readUe(&sps.subgroupBboxOrigin_bits_minus1);
+        bs.readUe(&sps.subgroupBboxSize_bits_minus1);
+      }
+    }
   }
 
     // conformance check: reordering constraint must be set with continuation
@@ -1143,6 +1183,10 @@ write(const SequenceParameterSet& sps, const AttributeParameterSet& aps)
       if (aps.cross_attr_prediction_enabled_this_type)
         bs.writeUe(aps.refAttrIdx);
     }
+    
+	  if (sps.layer_group_enabled_flag)
+		  bs.write(aps.attr_ref_id_present_flag);
+
   }
 
   bs.byteAlign();
@@ -1323,6 +1367,13 @@ parseAps(const PayloadBuffer& buf, const SequenceParameterSet& sps)
       bs.read(&aps.cross_attr_prediction_enabled_this_type);
       if (aps.cross_attr_prediction_enabled_this_type)
         bs.readUe(&aps.refAttrIdx);
+    }
+    
+	  if (sps.layer_group_enabled_flag){
+      aps.layer_group_enabled_flag = true;
+		  bs.read(&aps.attr_ref_id_present_flag);
+    }else{
+      aps.layer_group_enabled_flag = false;    
     }
   }
 
@@ -1521,6 +1572,21 @@ write(
         bs.writeSe(gbh.gm_thresh2.second);
       }
     }
+  }
+
+  // layer-group slicing
+  if (sps.layer_group_enabled_flag)
+	  bs.writeUn(16, gbh.numSubsequentSubgroups);
+
+  const bool checkPlanarEligibilityBasedOnOctreeDepth =
+	  gps.geom_planar_mode_enabled_flag
+	  && gps.geom_octree_depth_planar_eligibiity_enabled_flag
+	  && !gps.geom_angular_mode_enabled_flag;
+
+  if (sps.layer_group_enabled_flag && checkPlanarEligibilityBasedOnOctreeDepth) {
+	  if (sps.layer_group_enabled_flag)
+		  for (int i = 0; i <= sps.num_layers_minus1[0]; i++)
+			  bs.write(gbh.planarEligibleKOctreeDepth[i]);
   }
 
   bs.byteAlign();
@@ -1734,6 +1800,22 @@ parseGbh(
       }
     }
   }
+  
+  // layer-group slicing
+  if (sps.layer_group_enabled_flag)
+	  bs.readUn(16, &gbh.numSubsequentSubgroups);
+
+  const bool checkPlanarEligibilityBasedOnOctreeDepth =
+	  gps.geom_planar_mode_enabled_flag
+	  && gps.geom_octree_depth_planar_eligibiity_enabled_flag
+	  && !gps.geom_angular_mode_enabled_flag;
+
+  if (sps.layer_group_enabled_flag && checkPlanarEligibilityBasedOnOctreeDepth) {
+	  gbh.planarEligibleKOctreeDepth.resize(sps.num_layers_minus1[0] + 1);
+	  for (int i = 0; i <= sps.num_layers_minus1[0]; i++) {
+		  gbh.planarEligibleKOctreeDepth[i] = bs.read();
+	  }
+  }
 
   bs.byteAlign();
 
@@ -1776,7 +1858,7 @@ write(
   const GeometryBrickFooter& gbf,
   PayloadBuffer* buf)
 {
-  assert(buf->type == PayloadType::kGeometryBrick);
+  assert(buf->type == PayloadType::kGeometryBrick || buf->type == PayloadType::kDependentGeometryDataUnit);
   auto bs = makeBitWriter(std::back_inserter(*buf));
 
   // NB: if modifying this footer, it is essential that the decoder can
@@ -1800,7 +1882,7 @@ parseGbf(
   int* bytesRead)
 {
   GeometryBrickFooter gbf;
-  assert(buf.type == PayloadType::kGeometryBrick);
+  assert(buf.type == PayloadType::kGeometryBrick || buf.type == PayloadType::kDependentGeometryDataUnit);
 
   // todo(df): this would be simpler to parse if it were written in reverse
   auto bufStart = buf.end() - 3; /* geom_num_points_minus1 */
@@ -1824,7 +1906,295 @@ parseGbf(
   return gbf;
 }
 
+
 //============================================================================
+
+void
+write(
+	const SequenceParameterSet& sps,
+	const GeometryParameterSet& gps,
+	const DependentGeometryDataUnitHeader& dep_gbh,
+	PayloadBuffer* buf)
+{
+	assert(buf->type == PayloadType::kDependentGeometryDataUnit);
+	auto bs = makeBitWriter(std::back_inserter(*buf));
+
+	bs.writeUn(4, dep_gbh.geom_parameter_set_id);
+	bs.writeUe(dep_gbh.geom_slice_id);
+
+	bs.writeUn(8, dep_gbh.layer_group_id);
+	if (sps.subgroup_enabled_flag[dep_gbh.layer_group_id]) {
+		bs.writeUn(16, dep_gbh.subgroup_id);
+
+		if (auto originBits = sps.subgroupBboxOrigin_bits_minus1 + 1) {
+			bs.writeUn(originBits, dep_gbh.subgroupBboxOrigin.x());
+			bs.writeUn(originBits, dep_gbh.subgroupBboxOrigin.y());
+			bs.writeUn(originBits, dep_gbh.subgroupBboxOrigin.z());
+		}
+		if (auto sizeBits = sps.subgroupBboxSize_bits_minus1 + 1) {
+			bs.writeUn(sizeBits, dep_gbh.subgroupBboxSize.x());
+			bs.writeUn(sizeBits, dep_gbh.subgroupBboxSize.y());
+			bs.writeUn(sizeBits, dep_gbh.subgroupBboxSize.z());
+		}
+	}
+
+	bs.writeUn(8, dep_gbh.ref_layer_group_id);
+	if (sps.subgroup_enabled_flag[dep_gbh.ref_layer_group_id])
+		bs.writeUn(16, dep_gbh.ref_subgroup_id);
+
+	bs.write(dep_gbh.context_reference_indication_flag);
+
+  if (dep_gbh.context_reference_indication_flag)
+	  bs.writeUn(8, dep_gbh.numSubsequentSubgroups);
+
+
+	const bool checkPlanarEligibilityBasedOnOctreeDepth =
+		gps.geom_planar_mode_enabled_flag
+		&& gps.geom_octree_depth_planar_eligibiity_enabled_flag
+		&& !gps.geom_angular_mode_enabled_flag;
+	if (checkPlanarEligibilityBasedOnOctreeDepth) {
+		for (int i = 0; i <= sps.num_layers_minus1[dep_gbh.layer_group_id]; i++)
+			bs.write(dep_gbh.planarEligibleKOctreeDepth[i]);
+	}
+
+	bs.byteAlign();
+}
+
+//----------------------------------------------------------------------------
+
+DependentGeometryDataUnitHeader
+parseDepGbh(
+	const SequenceParameterSet& sps,
+	const GeometryParameterSet& gps,
+	GeometryBrickHeader gbh,
+	const PayloadBuffer& buf,
+	int* bytesReadHead,
+	int* bytesReadFoot)
+{
+	DependentGeometryDataUnitHeader dep_gbh;
+	assert(buf.type == PayloadType::kDependentGeometryDataUnit);
+
+	auto bs = makeBitReader(buf.begin(), buf.end());
+
+	bs.readUn(4, &dep_gbh.geom_parameter_set_id);
+	bs.readUe(&dep_gbh.geom_slice_id);
+
+	bs.readUn(8, &dep_gbh.layer_group_id);
+	if (sps.subgroup_enabled_flag[dep_gbh.layer_group_id]) {
+		bs.readUn(16, &dep_gbh.subgroup_id);
+
+		if (auto originBits = sps.subgroupBboxOrigin_bits_minus1 + 1) {
+			bs.readUn(originBits, &dep_gbh.subgroupBboxOrigin.x());
+			bs.readUn(originBits, &dep_gbh.subgroupBboxOrigin.y());
+			bs.readUn(originBits, &dep_gbh.subgroupBboxOrigin.z());
+		}
+		if (auto sizeBits = sps.subgroupBboxSize_bits_minus1 + 1) {
+			bs.readUn(sizeBits, &dep_gbh.subgroupBboxSize.x());
+			bs.readUn(sizeBits, &dep_gbh.subgroupBboxSize.y());
+			bs.readUn(sizeBits, &dep_gbh.subgroupBboxSize.z());
+		}
+	}
+	else
+		dep_gbh.subgroup_id = 0;
+
+
+	bs.readUn(8, &dep_gbh.ref_layer_group_id);
+	if (sps.subgroup_enabled_flag[dep_gbh.ref_layer_group_id])
+		bs.readUn(16, &dep_gbh.ref_subgroup_id);
+	else
+		dep_gbh.ref_subgroup_id = 0;
+
+	bs.read(&dep_gbh.context_reference_indication_flag);	
+  
+  if (dep_gbh.context_reference_indication_flag)
+		bs.readUn(8, &dep_gbh.numSubsequentSubgroups);
+	else
+		dep_gbh.numSubsequentSubgroups = 0;
+
+
+	const bool checkPlanarEligibilityBasedOnOctreeDepth =
+		gps.geom_planar_mode_enabled_flag
+		&& gps.geom_octree_depth_planar_eligibiity_enabled_flag
+		&& !gps.geom_angular_mode_enabled_flag;
+	if (checkPlanarEligibilityBasedOnOctreeDepth) {
+		dep_gbh.planarEligibleKOctreeDepth.resize(sps.num_layers_minus1[dep_gbh.layer_group_id] + 1);
+		for (int i = 0; i <= sps.num_layers_minus1[dep_gbh.layer_group_id]; i++) {
+			dep_gbh.planarEligibleKOctreeDepth[i] = bs.read();
+		}
+	}
+
+	bs.byteAlign();
+
+	if (bytesReadHead)
+		*bytesReadHead = int(std::distance(buf.begin(), bs.pos()));
+
+	// To avoid having to make separate calls, the footer is parsed here
+	dep_gbh.footer = parseGbf(gps, gbh, buf, bytesReadFoot);
+
+	return dep_gbh;
+}
+
+DependentGeometryDataUnitHeader
+parseDepGbhIds(const PayloadBuffer& buf)
+{
+	DependentGeometryDataUnitHeader dep_gbh;
+	assert(buf.type == PayloadType::kDependentGeometryDataUnit);
+	auto bs = makeBitReader(buf.begin(), buf.end());
+
+	bs.readUn(4, &dep_gbh.geom_parameter_set_id);
+	bs.readUe(&dep_gbh.geom_slice_id);
+	// NB: to decode slice_tag requires sps activation
+
+	/* NB: this function only decodes ids at the start of the header. */
+	/* NB: do not attempt to parse any further */
+
+	return dep_gbh;
+}
+
+//============================================================================
+
+PayloadBuffer
+write(
+	const SequenceParameterSet& sps, const LayerGroupStructureInventory& inventory)
+{
+	PayloadBuffer buf(PayloadType::kLayerGroupStructureInventory);
+	auto bs = makeBitWriter(std::back_inserter(buf));
+
+	bs.writeUn(4, inventory.lgsi_seq_parameter_set_id);
+	bs.writeUn(5, inventory.lgsi_frame_idx_bits);
+	bs.writeUn(inventory.lgsi_frame_idx_bits, inventory.lgsi_frame_idx);
+
+	int num_slice_ids_minus1 = inventory.slice_ids.size() - 1;
+	bs.writeUn(16, num_slice_ids_minus1);
+	if (num_slice_ids_minus1 < 0) {
+		bs.byteAlign();
+		return buf;
+	}
+
+	for (const auto& slice : inventory.slice_ids) {
+		bs.writeUe(slice.lgsi_slice_id);
+		bs.writeUn(8, slice.lgsi_num_layer_groups_minus1);
+		bs.writeUe(slice.lgsi_subgroupBboxOrigin_bits_minus1);
+		bs.writeUe(slice.lgsi_subgroupBboxSize_bits_minus1);
+
+		for (const auto& entry : slice.layerGroups) {
+			bs.writeUn(8, entry.lgsi_layer_group_id);
+			bs.writeUn(8, entry.lgsi_num_layers_minus1);
+			bs.writeUn(16, entry.lgsi_num_subgroups_minus1);
+
+			for (const auto& subentry : entry.subgroups) {
+				bs.writeUn(16, subentry.lgsi_subgroup_id);
+				bs.writeUn(16, subentry.lgsi_parent_subgroup_id);
+
+				if (auto originBits = slice.lgsi_subgroupBboxOrigin_bits_minus1 + 1) {
+					bs.writeUn(originBits, subentry.lgsi_subgroupBboxOrigin.x());
+					bs.writeUn(originBits, subentry.lgsi_subgroupBboxOrigin.y());
+					bs.writeUn(originBits, subentry.lgsi_subgroupBboxOrigin.z());
+				}
+				if (auto sizeBits = slice.lgsi_subgroupBboxSize_bits_minus1 + 1) {
+					bs.writeUn(sizeBits, subentry.lgsi_subgroupBboxSize.x());
+					bs.writeUn(sizeBits, subentry.lgsi_subgroupBboxSize.y());
+					bs.writeUn(sizeBits, subentry.lgsi_subgroupBboxSize.z());
+				}
+			}
+		}
+	}
+
+	// NB: this is at the end of the inventory to aid fixed-width parsing
+	bs.writeUe(inventory.lgsi_origin_bits_minus1);
+	if (auto originBits = inventory.lgsi_origin_bits_minus1 + 1) {
+		auto origin_xyz = toXyz(sps.geometry_axis_order, inventory.lgsi_origin);
+		bs.writeSn(originBits, origin_xyz.x());
+		bs.writeSn(originBits, origin_xyz.y());
+		bs.writeSn(originBits, origin_xyz.z());
+	}
+
+	int origin_log2_scale = 0;
+	bs.writeUe(origin_log2_scale);
+
+	bs.byteAlign();
+
+	return buf;
+}
+
+//============================================================================
+
+LayerGroupStructureInventory
+parseLayerGroupStructureInventory(const PayloadBuffer& buf)
+{
+	LayerGroupStructureInventory inventory;
+	assert(buf.type == PayloadType::kLayerGroupStructureInventory);
+	auto bs = makeBitReader(buf.begin(), buf.end());
+
+	bs.readUn(4, &inventory.lgsi_seq_parameter_set_id);
+	bs.readUn(5, &inventory.lgsi_frame_idx_bits);
+	bs.readUn(inventory.lgsi_frame_idx_bits, &inventory.lgsi_frame_idx);
+	bs.readUn(16, &inventory.lgsi_num_slice_ids_minus1);
+	if (inventory.lgsi_num_slice_ids_minus1 < 0) {
+		bs.byteAlign();
+		return inventory;
+	}
+
+	for (int slice_id = 0; slice_id < inventory.lgsi_num_slice_ids_minus1 + 1; slice_id++) {
+		LayerGroupStructureInventory::SliceEntry slice;
+
+		bs.readUe(&slice.lgsi_slice_id);
+		bs.readUn(8, &slice.lgsi_num_layer_groups_minus1);
+
+		bs.readUe(&slice.lgsi_subgroupBboxOrigin_bits_minus1);
+		bs.readUe(&slice.lgsi_subgroupBboxSize_bits_minus1);
+
+		for (int layer_group_id = 0; layer_group_id < slice.lgsi_num_layer_groups_minus1 + 1; layer_group_id++) {
+			LayerGroupStructureInventory::GroupEntry entry;
+
+			bs.readUn(8, &entry.lgsi_layer_group_id);
+			bs.readUn(8, &entry.lgsi_num_layers_minus1);
+			bs.readUn(16, &entry.lgsi_num_subgroups_minus1);
+
+			for (int subgroup_id = 0; subgroup_id < entry.lgsi_num_subgroups_minus1 + 1; subgroup_id++) {
+				LayerGroupStructureInventory::SubGroupEntry subentry;
+
+				bs.readUn(16, &subentry.lgsi_subgroup_id);
+				bs.readUn(16, &subentry.lgsi_parent_subgroup_id);
+
+				if (auto originBits = slice.lgsi_subgroupBboxOrigin_bits_minus1 + 1) {
+					bs.readUn(originBits, &subentry.lgsi_subgroupBboxOrigin.x());
+					bs.readUn(originBits, &subentry.lgsi_subgroupBboxOrigin.y());
+					bs.readUn(originBits, &subentry.lgsi_subgroupBboxOrigin.z());
+				}
+				if (auto sizeBits = slice.lgsi_subgroupBboxSize_bits_minus1 + 1) {
+					bs.readUn(sizeBits, &subentry.lgsi_subgroupBboxSize.x());
+					bs.readUn(sizeBits, &subentry.lgsi_subgroupBboxSize.y());
+					bs.readUn(sizeBits, &subentry.lgsi_subgroupBboxSize.z());
+				}
+				entry.subgroups.push_back(subentry);
+			}
+			slice.layerGroups.push_back(entry);
+		}
+		inventory.slice_ids.push_back(slice);
+	}
+
+	Vec3<int> lgsi_origin_xyz;
+	bs.readUe(&inventory.lgsi_origin_bits_minus1);
+	if (auto originBits = inventory.lgsi_origin_bits_minus1 + 1) {
+		bs.readSn(originBits, &lgsi_origin_xyz.x());
+		bs.readSn(originBits, &lgsi_origin_xyz.y());
+		bs.readSn(originBits, &lgsi_origin_xyz.z());
+	}
+
+	int lgsi_origin_log2_scale;
+	bs.readUe(&lgsi_origin_log2_scale);
+	lgsi_origin_xyz *= 1 << lgsi_origin_log2_scale;
+
+	// NB: this is in XYZ axis order until converted to STV
+	inventory.lgsi_origin = lgsi_origin_xyz;
+
+	bs.byteAlign();
+
+	return inventory;
+}
+
+//----------------------------------------------------------------------------
 
 void
 write(
@@ -1963,6 +2333,28 @@ write(
       }
     }
     
+  }
+
+  if (sps.layer_group_enabled_flag) {
+	  bs.write(abh.subgroup_weight_adjustment_enabled_flag);
+	  if (abh.subgroup_weight_adjustment_enabled_flag) {
+
+      //abh.subgroup_weight_adj_coeff_a_bits_minus1 = numBits(abh.subgroup_weight_adj_coeff_a) - 1;
+      //abh.subgroup_weight_adj_coeff_b_bits_minus1 = numBits(abh.subgroup_weight_adj_coeff_b) - 1;
+
+		  //bs.writeUe(abh.subgroup_weight_adj_coeff_a_bits_minus1);
+		  //bs.writeUe(abh.subgroup_weight_adj_coeff_b_bits_minus1);
+    //  
+		  //auto coeffABits = abh.subgroup_weight_adj_coeff_a_bits_minus1 + 1;
+		  //auto coeffBBits = abh.subgroup_weight_adj_coeff_b_bits_minus1 + 1;
+
+		  //bs.writeSn(coeffABits,abh.subgroup_weight_adj_coeff_a);
+		  //bs.writeSn(coeffBBits,abh.subgroup_weight_adj_coeff_b);
+
+      
+		  bs.writeSe(abh.subgroup_weight_adj_coeff_a);
+		  bs.writeSe(abh.subgroup_weight_adj_coeff_b);
+	  }
   }
   bs.byteAlign();
 }
@@ -2144,6 +2536,32 @@ parseAbh(
     }
   }
 
+ 
+  if (sps.layer_group_enabled_flag) {
+	  bs.read(&abh.subgroup_weight_adjustment_enabled_flag);
+	  if (abh.subgroup_weight_adjustment_enabled_flag) {
+		  //bs.readUe(&abh.subgroup_weight_adj_coeff_a_bits_minus1);
+		  //bs.readUe(&abh.subgroup_weight_adj_coeff_b_bits_minus1);
+    //  
+		  //auto coeffABits = abh.subgroup_weight_adj_coeff_a_bits_minus1 + 1;
+		  //auto coeffBBits = abh.subgroup_weight_adj_coeff_b_bits_minus1 + 1;
+
+		  //bs.readSn(coeffABits,&abh.subgroup_weight_adj_coeff_a);
+		  //bs.readSn(coeffBBits,&abh.subgroup_weight_adj_coeff_b);
+
+
+		  bs.readSe(&abh.subgroup_weight_adj_coeff_a);
+		  bs.readSe(&abh.subgroup_weight_adj_coeff_b);
+	  }
+	  else {
+		  //abh.subgroup_weight_adj_coeff_a_bits_minus1 = 0;
+		  //abh.subgroup_weight_adj_coeff_b_bits_minus1 = 0;
+
+		  abh.subgroup_weight_adj_coeff_a = 0;
+		  abh.subgroup_weight_adj_coeff_b = 0;
+	  }
+  }
+
   bs.byteAlign();
 
   if (bytesRead)
@@ -2152,6 +2570,245 @@ parseAbh(
   return abh;
 }
 
+//----------------------------------------------------------------------------
+
+void
+write(
+  const SequenceParameterSet& sps,
+  const AttributeParameterSet& aps,
+  const DependentAttributeDataUnitHeader& dep_abh,
+  PayloadBuffer* buf)
+{
+  assert(buf->type == PayloadType::kDependentAttributeDataUnit);
+  auto bs = makeBitWriter(std::back_inserter(*buf));
+
+  int abh_reserved_zero_3bits = 0;
+  bs.writeUn(4, dep_abh.attr_attr_parameter_set_id);
+  bs.writeUe(dep_abh.attr_sps_attr_idx);
+  bs.writeUe(dep_abh.attr_geom_slice_id);
+
+	
+	bs.writeUn(8, dep_abh.layer_group_id);
+	if (sps.subgroup_enabled_flag[dep_abh.layer_group_id]) {	
+		bs.writeUn(16, dep_abh.subgroup_id);
+		
+	}
+	
+	if (aps.attr_ref_id_present_flag)
+		bs.writeUn(8, dep_abh.ref_layer_group_id);
+
+	if (sps.subgroup_enabled_flag[dep_abh.layer_group_id]) {
+
+		if (aps.attr_ref_id_present_flag) {
+			bs.writeUn(16, dep_abh.ref_subgroup_id);
+			bs.write(dep_abh.context_reference_indication_flag);
+		}
+	}
+
+
+	//bs.writeUn(8, dep_abh.ref_layer_group_id);
+	//if (sps.subgroup_enabled_flag[dep_abh.ref_layer_group_id]) 			
+	//	bs.writeUn(16, dep_abh.ref_subgroup_id);
+  
+  assert(dep_abh.attr_sps_attr_idx < sps.attributeSets.size());
+  if (dep_abh.lcpPresent(sps.attributeSets[dep_abh.attr_sps_attr_idx], aps)) {
+    assert(dep_abh.attrLcpCoeffs.size() >= sps.num_layers_minus1[dep_abh.layer_group_id]+2);
+    int pred = 4;
+
+    for (int i = 0; i < sps.num_layers_minus1[dep_abh.layer_group_id]+2; i++) {
+      int lcp_coeff_diff = dep_abh.attrLcpCoeffs[i] - pred;
+      pred = dep_abh.attrLcpCoeffs[i];
+      bs.writeSe(lcp_coeff_diff);
+    }
+  }
+
+  
+  if (dep_abh.icpPresent(sps.attributeSets[dep_abh.attr_sps_attr_idx], aps)) {
+    assert(dep_abh.icpCoeffs.size() >= sps.num_layers_minus1[dep_abh.layer_group_id]+2);
+    Vec3<int8_t> pred = {0, 4, 4};
+
+    for (int i = 0; i < sps.num_layers_minus1[dep_abh.layer_group_id]+2; i++) {
+      auto icp_coeff_diff = dep_abh.icpCoeffs[i] - pred;
+      pred = dep_abh.icpCoeffs[i];
+      // NB: only k > 1 is coded
+      for (int k = 1; k < 3; k++)
+        bs.writeSe(icp_coeff_diff[k]);
+    }
+  }
+  
+  if (aps.aps_slice_qp_deltas_present_flag){
+    bs.writeSe(dep_abh.attr_qp_delta_luma);
+    bs.writeSe(dep_abh.attr_qp_delta_chroma);
+  }
+
+  bool attr_layer_qp_present_flag = !dep_abh.attr_layer_qp_delta_luma.empty();
+  bs.write(attr_layer_qp_present_flag);
+  if (attr_layer_qp_present_flag) {
+    int attr_num_qp_layers_minus1 = dep_abh.attr_num_qp_layers_minus1();
+    bs.writeUe(attr_num_qp_layers_minus1);
+    for (int i = 0; i <= attr_num_qp_layers_minus1; i++) {
+      bs.writeSe(dep_abh.attr_layer_qp_delta_luma[i]);
+      bs.writeSe(dep_abh.attr_layer_qp_delta_chroma[i]);
+    }
+  }
+  
+  
+	bs.write(dep_abh.subgroup_weight_adjustment_enabled_flag);
+	if (dep_abh.subgroup_weight_adjustment_enabled_flag) {
+		//bs.writeUe(abh.subgroup_weight_adj_coeff_a_bits_minus1);
+		//bs.writeUe(abh.subgroup_weight_adj_coeff_b_bits_minus1);
+  //  
+		//auto coeffABits = abh.subgroup_weight_adj_coeff_a_bits_minus1 + 1;
+		//auto coeffBBits = abh.subgroup_weight_adj_coeff_b_bits_minus1 + 1;
+
+		//bs.writeSn(coeffABits,dep_abh.subgroup_weight_adj_coeff_a);
+		//bs.writeSn(coeffBBits,dep_abh.subgroup_weight_adj_coeff_b);
+      
+		bs.writeSe(dep_abh.subgroup_weight_adj_coeff_a);
+		bs.writeSe(dep_abh.subgroup_weight_adj_coeff_b);
+	}
+
+  
+
+	bs.byteAlign();
+}
+
+//----------------------------------------------------------------------------
+
+DependentAttributeDataUnitHeader
+parseDepAbhIds(const PayloadBuffer& buf)
+{
+  DependentAttributeDataUnitHeader abh;
+  assert(buf.type == PayloadType::kDependentAttributeDataUnit);
+  auto bs = makeBitReader(buf.begin(), buf.end());
+
+  int abh_reserved_zero_3bits;
+  bs.readUn(4, &abh.attr_attr_parameter_set_id);
+  bs.readUe(&abh.attr_sps_attr_idx);
+  bs.readUe(&abh.attr_geom_slice_id);
+
+  /* NB: this function only decodes ids at the start of the header. */
+  /* NB: do not attempt to parse any further */
+
+  return abh;
+}
+
+//============================================================================
+
+DependentAttributeDataUnitHeader
+parseDepAbh(
+  const SequenceParameterSet& sps,
+  const AttributeParameterSet& aps,
+  //const AttributeBrickHeader& abh,
+  const PayloadBuffer& buf,
+  int* bytesRead)
+{
+  DependentAttributeDataUnitHeader dep_abh;
+  assert(buf.type == PayloadType::kDependentAttributeDataUnit);
+  auto bs = makeBitReader(buf.begin(), buf.end());
+
+  bs.readUn(4, &dep_abh.attr_attr_parameter_set_id);
+  bs.readUe(&dep_abh.attr_sps_attr_idx);
+  bs.readUe(&dep_abh.attr_geom_slice_id);
+  
+  bs.readUn(8, &dep_abh.layer_group_id);
+    if (sps.subgroup_enabled_flag[dep_abh.layer_group_id]) {	
+	    bs.readUn(16, &dep_abh.subgroup_id);
+    }
+	  else
+		  dep_abh.subgroup_id = 0;
+
+    
+	if (aps.attr_ref_id_present_flag)
+		bs.readUn(8, &dep_abh.ref_layer_group_id);
+
+	if (sps.subgroup_enabled_flag[dep_abh.layer_group_id]) {
+		if (aps.attr_ref_id_present_flag) {
+			bs.readUn(16, &dep_abh.ref_subgroup_id);
+			bs.read(&dep_abh.context_reference_indication_flag);
+		}
+		else
+			dep_abh.context_reference_indication_flag = false;
+	}
+
+	
+	//bs.readUn(8, &abh.ref_layer_group_id);
+	//if (sps.subgroup_enabled_flag[abh.ref_layer_group_id]) 			
+	//	bs.readUn(16, &abh.ref_subgroup_id);
+	//else
+	//	abh.ref_subgroup_id = 0;
+  
+  assert(dep_abh.attr_sps_attr_idx < sps.attributeSets.size());
+  if (dep_abh.lcpPresent(sps.attributeSets[dep_abh.attr_sps_attr_idx], aps)) {
+    dep_abh.attrLcpCoeffs.resize(sps.num_layers_minus1[dep_abh.layer_group_id]+2, 0);
+    int pred = 4;
+
+    for (int i = 0; i < dep_abh.attrLcpCoeffs.size(); i++) {
+      auto& lcp_coeff_diff = dep_abh.attrLcpCoeffs[i];
+      bs.readSe(&lcp_coeff_diff);
+      dep_abh.attrLcpCoeffs[i] += pred;
+      pred = dep_abh.attrLcpCoeffs[i];
+    }
+  }
+  
+  if (dep_abh.icpPresent(sps.attributeSets[dep_abh.attr_sps_attr_idx], aps)) {
+    dep_abh.icpCoeffs.resize(sps.num_layers_minus1[dep_abh.layer_group_id]+2, 0);
+    Vec3<int8_t> pred{0, 4, 4};
+
+    for (int i = 0; i < dep_abh.icpCoeffs.size(); i++) {
+      auto& icp_coeff_diff = dep_abh.icpCoeffs[i];
+      for (int k = 1; k < 3; k++)
+        bs.readSe(&icp_coeff_diff[k]);
+
+      // NB: pred[0] is always 0.
+      dep_abh.icpCoeffs[i] += pred;
+      pred = dep_abh.icpCoeffs[i];
+    }
+  }
+  
+  if (aps.aps_slice_qp_deltas_present_flag) {
+    bs.readSe(&dep_abh.attr_qp_delta_luma);
+    bs.readSe(&dep_abh.attr_qp_delta_chroma);
+  }
+
+  bool attr_layer_qp_present_flag;
+  bs.read(&attr_layer_qp_present_flag);
+  if (attr_layer_qp_present_flag) {
+    int attr_num_qp_layers_minus1;
+    bs.readUe(&attr_num_qp_layers_minus1);
+    dep_abh.attr_layer_qp_delta_luma.resize(attr_num_qp_layers_minus1 + 1);
+    dep_abh.attr_layer_qp_delta_chroma.resize(attr_num_qp_layers_minus1 + 1);
+    for (int i = 0; i <= attr_num_qp_layers_minus1; i++) {
+      bs.readSe(&dep_abh.attr_layer_qp_delta_luma[i]);
+      bs.readSe(&dep_abh.attr_layer_qp_delta_chroma[i]);
+    }
+  }
+
+	bs.read(&dep_abh.subgroup_weight_adjustment_enabled_flag);
+	if (dep_abh.subgroup_weight_adjustment_enabled_flag) {
+    
+		//auto coeffABits = abh.subgroup_weight_adj_coeff_a_bits_minus1 + 1;
+		//auto coeffBBits = abh.subgroup_weight_adj_coeff_b_bits_minus1 + 1;
+
+		//bs.readSn(coeffABits,&dep_abh.subgroup_weight_adj_coeff_a);
+		//bs.readSn(coeffBBits,&dep_abh.subgroup_weight_adj_coeff_b);
+    
+		bs.readSe(&dep_abh.subgroup_weight_adj_coeff_a);
+		bs.readSe(&dep_abh.subgroup_weight_adj_coeff_b);
+	}
+	else {
+		dep_abh.subgroup_weight_adj_coeff_a = 0;
+		dep_abh.subgroup_weight_adj_coeff_b = 0;
+	}
+
+
+  bs.byteAlign();
+
+  if (bytesRead)
+    *bytesRead = int(std::distance(buf.begin(), bs.pos()));
+
+  return dep_abh;
+}
 //============================================================================
 
 ConstantAttributeDataUnit

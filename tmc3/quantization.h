@@ -46,6 +46,7 @@ namespace pcc {
 struct AttributeDescription;
 struct AttributeParameterSet;
 struct AttributeBrickHeader;
+struct DependentAttributeDataUnitHeader;
 
 //============================================================================
 // Quantisation methods
@@ -160,6 +161,27 @@ QpSet deriveQpSet(
   const AttributeParameterSet& attr_aps,
   const AttributeBrickHeader& abh);
 
+//============================================================================
+// Determine the Qps for a particular layer in an attribute slice
+Qps deriveQps(
+  const AttributeParameterSet& attr_aps,
+  const DependentAttributeDataUnitHeader& dep_abh,
+  int qpLayer);
+
+// Determine the base layer QPs for an attribute slice
+QpLayers deriveLayerQps(
+  const AttributeParameterSet& attr_aps, const DependentAttributeDataUnitHeader& dep_abh);
+
+// Determine a list of Qp offsets per region
+QpRegionList deriveQpRegions(
+  const AttributeParameterSet& attr_aps, const DependentAttributeDataUnitHeader& dep_abh);
+
+// Determine the Qp configuration for an attribute slice
+QpSet deriveQpSet(
+  const AttributeDescription& attrDesc,
+  const AttributeParameterSet& attr_aps,
+  const AttributeBrickHeader& abh,
+  const DependentAttributeDataUnitHeader& dep_abh);
 //============================================================================
 // Quantisation methods for geometry
 

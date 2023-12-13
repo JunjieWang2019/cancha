@@ -157,7 +157,70 @@ deriveQpSet(
 
   return qpset;
 }
+//============================================================================
 
+Qps
+deriveQps(
+  const AttributeParameterSet& attr_aps,
+  const DependentAttributeDataUnitHeader& dep_abh,
+  int qpLayer)
+{
+  int sliceQpLuma = attr_aps.init_qp_minus4 + 4;
+  int sliceQpChroma = attr_aps.aps_chroma_qp_offset;
+
+  if (attr_aps.aps_slice_qp_deltas_present_flag) {
+    sliceQpLuma += dep_abh.attr_qp_delta_luma;
+    sliceQpChroma += dep_abh.attr_qp_delta_chroma;
+  }
+
+  if (dep_abh.attr_layer_qp_present_flag()) {
+    sliceQpLuma += dep_abh.attr_layer_qp_delta_luma[qpLayer];
+    sliceQpChroma += dep_abh.attr_layer_qp_delta_chroma[qpLayer];
+  }
+
+  return {sliceQpLuma, sliceQpChroma};
+}
+
+//============================================================================
+
+QpLayers
+deriveLayerQps(
+  const AttributeParameterSet& attr_aps, 
+  const DependentAttributeDataUnitHeader& dep_abh)
+{
+  QpLayers layers;
+
+  layers.push_back(deriveQps(attr_aps, dep_abh, 0));
+
+  if (dep_abh.attr_layer_qp_present_flag()) {
+    int numLayers = dep_abh.attr_num_qp_layers_minus1() + 1;
+    for (int layer = 1; layer < numLayers; layer++) {
+      layers.push_back(deriveQps(attr_aps, dep_abh, layer));
+    }
+  }
+
+  return layers;
+}
+
+//============================================================================
+
+QpSet
+deriveQpSet(
+  const AttributeDescription& attrDesc,
+  const AttributeParameterSet& attr_aps,
+  const AttributeBrickHeader& abh,
+  const DependentAttributeDataUnitHeader& dep_abh)
+{
+  QpSet qpset;
+  qpset.layers = deriveLayerQps(attr_aps, dep_abh);
+  qpset.regions = deriveQpRegions(attr_aps, abh);
+
+  // The mimimum Qp = 4 is always lossless; the maximum varies according to
+  // bitdepth.
+  qpset.maxQp = 51 + 6 * (attrDesc.bitdepth - 8);
+
+  return qpset;
+}
 //============================================================================
 // Determines the quantizers at a given layer
 Quantizers

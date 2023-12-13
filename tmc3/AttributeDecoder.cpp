@@ -200,17 +200,23 @@ AttributeDecoder::decode(
   const char* payload,
   size_t payloadLen,
   AttributeContexts& ctxtMem,
-  PCCPointSet3& pointCloud  ,
-  AttributeInterPredParams& attrInterPredParams
-  )
+  PCCPointSet3& pointCloud,
+  AttributeInterPredParams& attrInterPredParams,
+  AttributeGranularitySlicingParam &slicingParam)
 {
   if (attr_aps.attr_encoding == AttributeEncoding::kRaw) {
     AttrRawDecoder::decode(
       attr_desc, attr_aps, abh, payload, payloadLen, pointCloud);
     return;
   }
+  
+  
+  QpSet qpSet;
+  if(slicingParam.is_dependent_unit)
+    qpSet = deriveQpSet(attr_desc, attr_aps, abh, *slicingParam.buf.abh_dep);
+  else
+    qpSet = deriveQpSet(attr_desc, attr_aps, abh);
 
-  QpSet qpSet = deriveQpSet(attr_desc, attr_aps, abh);
 
   PCCResidualsDecoder decoder(abh, ctxtMem);
   decoder.start(sps, payload, payloadLen);
@@ -222,14 +228,14 @@ AttributeDecoder::decode(
   if (attr_aps.refAttrIdx != -1 && isEnableCrossTypePred)
    isColor = (attr_aps.aps_attr_parameter_set_id == 1);
 
-  int maxPos = 1;
-  int maxR = 1;
-  int maxC = 1;
+  int64_t maxPos = 1;
+  int64_t maxR = 1;
+  int64_t maxC = 1;
   int64_t wAttr = 0;
 
   if (attr_aps.lodParametersPresent() && isEnableCrossTypePred) {
     auto bbox = pointCloud.computeBoundingBox();
-    int comMaxPos = bbox.max[0] + bbox.max[1] + bbox.max[2] - bbox.min[0]
+    int64_t comMaxPos = bbox.max[0] + bbox.max[1] + bbox.max[2] - bbox.min[0]
       - bbox.min[1] - bbox.min[2];
     maxPos = comMaxPos;
     const int64_t clipMax = (1ll << attr_desc.bitdepth) - 1;
@@ -239,6 +245,7 @@ AttributeDecoder::decode(
     if (!isColor) {
       int QP = attr_aps.init_qp_minus4 + 4;
       int64_t lambda = 1939 - 33 * QP;
+      //overflow
       wAttr = round((lambda * (maxPos << 10) / maxC) >> 12);
 
     } else if (isColor) {
@@ -248,9 +255,12 @@ AttributeDecoder::decode(
     }
   }
   // generate LoDs if necessary
-  if (attr_aps.lodParametersPresent() && _lods.empty())
+  if (attr_aps.lodParametersPresent() && _lods.empty()) {
     _lods.generate(
-      attr_aps, abh, geom_num_points_minus1, minGeomNodeSizeLog2, pointCloud, attrInterPredParams);
+      attr_aps, abh, pointCloud.getPointCount() - 1, minGeomNodeSizeLog2, pointCloud, attrInterPredParams, slicingParam.maxLevel, slicingParam.is_dependent_unit);
+    if(slicingParam.is_dependent_unit)
+        _lods.predictFromParent(pointCloud,*slicingParam.buf.pointCloudParent);
+  }
 
   if (isEnableCrossTypePred && !isColor && !_lods.empty()) {
     decideNeighborWithColor(
@@ -287,13 +297,13 @@ AttributeDecoder::decode(
 
     case AttributeEncoding::kPredictingTransform:
       decodeReflectancesPred(
-        attr_desc, attr_aps, abh, qpSet, decoder, pointCloud, attrInterPredParams);
+        attr_desc, attr_aps, abh, qpSet, decoder, pointCloud, attrInterPredParams,slicingParam);
       break;
 
     case AttributeEncoding::kLiftingTransform:
       decodeReflectancesLift(
         attr_desc, attr_aps, abh, qpSet, geom_num_points_minus1,
-        minGeomNodeSizeLog2, decoder, pointCloud, attrInterPredParams);
+        minGeomNodeSizeLog2, decoder, pointCloud, attrInterPredParams,slicingParam);
       break;
 
     case AttributeEncoding::kRaw:
@@ -308,13 +318,13 @@ AttributeDecoder::decode(
       break;
 
     case AttributeEncoding::kPredictingTransform:
-      decodeColorsPred(attr_desc, attr_aps, abh, qpSet, decoder, pointCloud);
+      decodeColorsPred(attr_desc, attr_aps, abh, qpSet, decoder, pointCloud,slicingParam);
       break;
 
     case AttributeEncoding::kLiftingTransform:
       decodeColorsLift(
         attr_desc, attr_aps, abh, qpSet, geom_num_points_minus1,
-        minGeomNodeSizeLog2, decoder, pointCloud);
+        minGeomNodeSizeLog2, decoder, pointCloud,slicingParam);
       break;
 
     case AttributeEncoding::kRaw:
@@ -342,6 +352,28 @@ AttributeDecoder::isReusable(
   return _lods.isReusable(aps, abh);
 }
 
+//----------------------------------------------------------------------------
+AttributeLods&
+AttributeDecoder::getLods(){
+    return _lods;
+}
+
+//----------------------------------------------------------------------------
+std::vector<uint32_t>&
+AttributeDecoder::getIndexes(){
+    return _lods.indexes;
+}
+
+//----------------------------------------------------------------------------
+std::vector<uint32_t>&
+AttributeDecoder::pointIndexToPredictorIndex(){
+  _pointIndexToPredictorIndex.clear();
+  _pointIndexToPredictorIndex.resize(_lods.indexes.size());
+  for(int predictorIndex=0; predictorIndex<_lods.indexes.size(); predictorIndex++)
+      _pointIndexToPredictorIndex[_lods.indexes[predictorIndex]] = predictorIndex;
+
+  return _pointIndexToPredictorIndex;
+}
 //----------------------------------------------------------------------------
 
 void
@@ -390,15 +422,19 @@ AttributeDecoder::decodeReflectancesPred(
   const AttributeBrickHeader& abh,
   const QpSet& qpSet,
   PCCResidualsDecoder& decoder,
-  PCCPointSet3& pointCloud    ,
-    const AttributeInterPredParams& attrInterPredParams)
+  PCCPointSet3& pointCloud,
+  const AttributeInterPredParams& attrInterPredParams,
+  AttributeGranularitySlicingParam &slicingParam)
 {
+
   const size_t pointCount = pointCloud.getPointCount();
   const int64_t maxReflectance = (1ll << desc.bitdepth) - 1;
-
+  
   int zeroRunRem = 0;
   int quantLayer = 0;
-
+  int quantLayerID = 0;
+  int maxQuantLayerID = int(qpSet.layers.size()) - 1;
+  
   std::vector<uint64_t> quantWeights;
   if (!aps.scalable_lifting_enabled_flag) {
     computeQuantizationWeights(
@@ -409,13 +445,24 @@ AttributeDecoder::decodeReflectancesPred(
       _lods.predictors, _lods.numPointsInLod, pointCount, 0, quantWeights);
   }
 
+  if(slicingParam.is_dependent_unit){
+    if(slicingParam.buf.abh_dep->subgroup_weight_adjustment_enabled_flag) {
+      updateQuantizationWeights(_lods.predictors, quantWeights, aps.quant_neigh_weight,slicingParam.buf.abh_dep->subgroup_weight_adj_coeff_a,slicingParam.buf.abh_dep->subgroup_weight_adj_coeff_b);
+    }
+  }else{
+    if(abh.subgroup_weight_adjustment_enabled_flag) {
+      updateQuantizationWeights(_lods.predictors, quantWeights, aps.quant_neigh_weight,abh.subgroup_weight_adj_coeff_a,abh.subgroup_weight_adj_coeff_b);
+    }
+  }
+
   for (size_t predictorIndex = 0; predictorIndex < pointCount;
        ++predictorIndex) {
     if (predictorIndex == _lods.numPointsInLod[quantLayer]) {
-      quantLayer = std::min(int(qpSet.layers.size()) - 1, quantLayer + 1);
+      quantLayer = std::min(int(_lods.numPointsInLod.size()) - 1, quantLayer + 1);
+      quantLayerID = std::min(maxQuantLayerID, quantLayerID + 1);
     }
     const uint32_t pointIndex = _lods.indexes[predictorIndex];
-    auto quant = qpSet.quantizers(pointCloud[pointIndex], quantLayer);
+    auto quant = qpSet.quantizers(pointCloud[pointIndex], quantLayerID);
     auto& predictor = _lods.predictors[predictorIndex];
     predictor.predMode = 0;
 
@@ -426,14 +473,23 @@ AttributeDecoder::decodeReflectancesPred(
     if (!zeroRunRem)
       attValue0 = decoder.decode();
 
-    if (predModeEligibleRefl(desc, aps, pointCloud, _lods.indexes, predictor, attrInterPredParams))
-      decodePredModeRefl(aps, attValue0, predictor);
-
+    
+    if(slicingParam.is_dependent_unit && (predictorIndex < _lods.numPointsInLod[0])){} else{
+        if (predModeEligibleRefl(desc, aps, pointCloud, _lods.indexes, predictor, attrInterPredParams))
+            decodePredModeRefl(aps, attValue0, predictor);
+    }
+    
     attr_t& reflectance = pointCloud.getReflectance(pointIndex);
-    const int64_t quantPredAttValue =
-      predictor.predictReflectance(pointCloud, _lods.indexes,
-      attrInterPredParams
-      );
+    int64_t quantPredAttValue;
+    
+    if(slicingParam.is_dependent_unit && (predictorIndex < _lods.numPointsInLod[0])){
+        const auto parentIndex = predictor.neighbors[0].predictorIndex;
+        quantPredAttValue = slicingParam.buf.pointCloudParent->getReflectance(parentIndex);
+    }else{
+        quantPredAttValue = predictor.predictReflectance(pointCloud, _lods.indexes,
+      attrInterPredParams);
+    }
+
 
     int64_t qStep = quant[0].stepSize();
     int64_t weight =
@@ -508,19 +564,32 @@ AttributeDecoder::decodeColorsPred(
   const AttributeBrickHeader& abh,
   const QpSet& qpSet,
   PCCResidualsDecoder& decoder,
-  PCCPointSet3& pointCloud)
+  PCCPointSet3& pointCloud,
+  AttributeGranularitySlicingParam &slicingParam)
 {
   const size_t pointCount = pointCloud.getPointCount();
 
   int64_t clipMax = (1 << desc.bitdepth) - 1;
   Vec3<int32_t> values;
+  
 
-  bool icpPresent = abh.icpPresent(desc, aps);
-  auto icpCoeff = icpPresent ? abh.icpCoeffs[0] : 0;
+  bool icpPresent = false;
+  Vec3<int8_t> icpCoeff = {0,0,0};
+  
+  if(slicingParam.is_dependent_unit){
+    icpPresent = slicingParam.buf.abh_dep->icpPresent(desc, aps);
+    icpCoeff = icpPresent ? slicingParam.buf.abh_dep->icpCoeffs[0] : 0;
+  }else{
+    icpPresent = abh.icpPresent(desc, aps);
+    icpCoeff = icpPresent ? abh.icpCoeffs[0] : 0;
+  }
 
   int lod = 0;
   int zeroRunRem = 0;
   int quantLayer = 0;
+  int quantLayerID = 0;
+  int maxQuantLayerID = int(qpSet.layers.size()) - 1;
+  
 
   std::vector<uint64_t> quantWeights;
   if (!aps.scalable_lifting_enabled_flag) {
@@ -531,13 +600,25 @@ AttributeDecoder::decodeColorsPred(
       _lods.predictors, _lods.numPointsInLod, pointCount, 0, quantWeights);
   }
 
+  
+  if(slicingParam.is_dependent_unit){
+    if(slicingParam.buf.abh_dep->subgroup_weight_adjustment_enabled_flag) {
+      updateQuantizationWeights(_lods.predictors, quantWeights, aps.quant_neigh_weight,slicingParam.buf.abh_dep->subgroup_weight_adj_coeff_a,slicingParam.buf.abh_dep->subgroup_weight_adj_coeff_b);
+    }
+  }else{
+    if(abh.subgroup_weight_adjustment_enabled_flag) {
+      updateQuantizationWeights(_lods.predictors, quantWeights, aps.quant_neigh_weight,abh.subgroup_weight_adj_coeff_a,abh.subgroup_weight_adj_coeff_b);
+    }
+  }
+
   for (size_t predictorIndex = 0; predictorIndex < pointCount;
        ++predictorIndex) {
     if (predictorIndex == _lods.numPointsInLod[quantLayer]) {
-      quantLayer = std::min(int(qpSet.layers.size()) - 1, quantLayer + 1);
+      quantLayer = std::min(int(_lods.numPointsInLod.size()) - 1, quantLayer + 1);
+      quantLayerID = std::min(maxQuantLayerID, quantLayerID + 1);
     }
     const uint32_t pointIndex = _lods.indexes[predictorIndex];
-    auto quant = qpSet.quantizers(pointCloud[pointIndex], quantLayer);
+    auto quant = qpSet.quantizers(pointCloud[pointIndex], quantLayerID);
     auto& predictor = _lods.predictors[predictorIndex];
     predictor.predMode = 0;
 
@@ -548,16 +629,29 @@ AttributeDecoder::decodeColorsPred(
       values[0] = values[1] = values[2] = 0;
     else
       decoder.decode(&values[0]);
-
-    if (predModeEligibleColor(desc, aps, pointCloud, _lods.indexes, predictor))
-      decodePredModeColor(aps, values, predictor);
+    
+    if(slicingParam.is_dependent_unit && (predictorIndex < _lods.numPointsInLod[0])){} else{
+        if (predModeEligibleColor(desc, aps, pointCloud, _lods.indexes, predictor))
+          decodePredModeColor(aps, values, predictor);
+    }
+    
 
     Vec3<attr_t>& color = pointCloud.getColor(pointIndex);
-    const Vec3<attr_t> predictedColor =
-      predictor.predictColor(pointCloud, _lods.indexes);
+    Vec3<attr_t> predictedColor;
+    
+    if(slicingParam.is_dependent_unit && (predictorIndex < _lods.numPointsInLod[0])){
+        const auto parentIndex = predictor.neighbors[0].predictorIndex;
+        predictedColor = slicingParam.buf.pointCloudParent->getColor(parentIndex);
+    }else{
+        predictedColor = predictor.predictColor(pointCloud, _lods.indexes);
+    }
 
-    if (icpPresent && predictorIndex == _lods.numPointsInLod[lod])
-      icpCoeff = abh.icpCoeffs[++lod];
+    if (icpPresent && predictorIndex == _lods.numPointsInLod[lod]){
+      if(slicingParam.is_dependent_unit)
+        icpCoeff = slicingParam.buf.abh_dep->icpCoeffs[++lod];
+      else
+        icpCoeff = abh.icpCoeffs[++lod];
+    }
 
     int64_t residual0 = 0;
     for (int k = 0; k < 3; ++k) {
@@ -743,46 +837,77 @@ AttributeDecoder::decodeColorsLift(
   int geom_num_points_minus1,
   int minGeomNodeSizeLog2,
   PCCResidualsDecoder& decoder,
-  PCCPointSet3& pointCloud)
+  PCCPointSet3& pointCloud,
+  AttributeGranularitySlicingParam &slicingParam)
 {
   const size_t pointCount = pointCloud.getPointCount();
   std::vector<uint64_t> weights;
-
+  
   if (!aps.scalable_lifting_enabled_flag) {
     PCCComputeQuantizationWeights(_lods.predictors, weights);
   } else {
-    computeQuantizationWeightsScalable(
-      _lods.predictors, _lods.numPointsInLod, geom_num_points_minus1 + 1,
-      minGeomNodeSizeLog2, weights);
+      computeQuantizationWeightsScalable(
+        _lods.predictors, _lods.numPointsInLod, geom_num_points_minus1 + 1,
+        minGeomNodeSizeLog2, weights);
   }
 
   const size_t lodCount = _lods.numPointsInLod.size();
   std::vector<Vec3<int64_t>> colors;
   colors.resize(pointCount);
 
+  
+  size_t pointCountParent = 0;
+  std::vector<Vec3<int64_t>> colorsParent;
+  if(slicingParam.is_dependent_unit){
+      pointCountParent = slicingParam.buf.pointCloudParent->getPointCount();
+      colorsParent.resize(pointCountParent);
+
+      for (size_t index = 0; index < pointCountParent; ++index) {
+        const auto& color = slicingParam.buf.pointCloudParent->getColor(index);
+        for (size_t d = 0; d < 3; ++d) {
+          colorsParent[index][d] = int32_t(color[d]) << kFixedPointAttributeShift;
+        }
+      }
+  }
+
   // decompress
   // Per level-of-detail coefficients for last component prediction
   int lod = 0;
   int8_t lastCompPredCoeff = 0;
-  if (aps.last_component_prediction_enabled_flag)
-    lastCompPredCoeff = abh.attrLcpCoeffs[0];
+  if (aps.last_component_prediction_enabled_flag){
+    if(slicingParam.is_dependent_unit){
+      lastCompPredCoeff = slicingParam.buf.abh_dep->attrLcpCoeffs[0];    
+    }else{
+      lastCompPredCoeff = abh.attrLcpCoeffs[0];
+    }
+  }
 
   int zeroRunRem = 0;
   int quantLayer = 0;
+  int quantLayerID = 0;
+  int maxQuantLayerID = int(qpSet.layers.size()) - 1;
+  
+
   for (size_t predictorIndex = 0; predictorIndex < pointCount;
        ++predictorIndex) {
     if (predictorIndex == _lods.numPointsInLod[quantLayer]) {
-      quantLayer = std::min(int(qpSet.layers.size()) - 1, quantLayer + 1);
+      quantLayer = std::min(int(_lods.numPointsInLod.size()) - 1, quantLayer + 1);
+      quantLayerID = std::min(maxQuantLayerID, quantLayerID + 1);
     }
 
     if (predictorIndex == _lods.numPointsInLod[lod]) {
       lod++;
-      if (aps.last_component_prediction_enabled_flag)
-        lastCompPredCoeff = abh.attrLcpCoeffs[lod];
+      if (aps.last_component_prediction_enabled_flag){        
+        if(slicingParam.is_dependent_unit){
+          lastCompPredCoeff = slicingParam.buf.abh_dep->attrLcpCoeffs[lod];    
+        }else{
+          lastCompPredCoeff = abh.attrLcpCoeffs[lod];
+        }      
+      }
     }
-
+    
     const uint32_t pointIndex = _lods.indexes[predictorIndex];
-    auto quant = qpSet.quantizers(pointCloud[pointIndex], quantLayer);
+    auto quant = qpSet.quantizers(pointCloud[pointIndex], quantLayerID);
 
     if (--zeroRunRem < 0)
       zeroRunRem = decoder.decodeRunLength();
@@ -808,6 +933,13 @@ AttributeDecoder::decodeColorsLift(
   }
 
   // reconstruct
+  
+  if(slicingParam.is_dependent_unit){
+    const size_t startIndex = 0;
+    const size_t endIndex = _lods.numPointsInLod[0];
+    PCCLiftPredict(_lods.predictors, startIndex, endIndex, false, colors, &colorsParent);  
+  }
+
   for (size_t lodIndex = 1; lodIndex < lodCount; ++lodIndex) {
     const size_t startIndex = _lods.numPointsInLod[lodIndex - 1];
     const size_t endIndex = _lods.numPointsInLod[lodIndex];
@@ -839,26 +971,26 @@ AttributeDecoder::decodeReflectancesLift(
   int geom_num_points_minus1,
   int minGeomNodeSizeLog2,
   PCCResidualsDecoder& decoder,
-  PCCPointSet3& pointCloud    ,
-    const AttributeInterPredParams& attrInterPredParams)
+  PCCPointSet3& pointCloud,
+  const AttributeInterPredParams& attrInterPredParams,
+  AttributeGranularitySlicingParam &slicingParam)
 {
   const size_t pointCount = pointCloud.getPointCount();
   std::vector<uint64_t> weights;
-
-
-
+    
+  //if (!aps.scalable_lifting_enabled_flag && !aps.layer_group_enabled_flag) {
   if (!aps.scalable_lifting_enabled_flag) {
     PCCComputeQuantizationWeights(_lods.predictors, weights, attrInterPredParams.enableAttrInterPred);
   } else {
-    computeQuantizationWeightsScalable(
-      _lods.predictors, _lods.numPointsInLod, geom_num_points_minus1 + 1,
-      minGeomNodeSizeLog2, weights);
+      computeQuantizationWeightsScalable(
+        _lods.predictors, _lods.numPointsInLod, geom_num_points_minus1 + 1,
+        minGeomNodeSizeLog2, weights);
   }
 
   const size_t lodCount = _lods.numPointsInLod.size();
   std::vector<int64_t> reflectances;
   reflectances.resize(pointCount);
-
+  
   std::vector<int64_t> reflectancesRef;
   const auto& referencePointCloud = attrInterPredParams.referencePointCloud;
   reflectancesRef.resize(referencePointCloud.getPointCount());
@@ -870,16 +1002,34 @@ AttributeDecoder::decodeReflectancesLift(
       << kFixedPointAttributeShift;
   }
 
+  size_t pointCountParent = 0;
+  std::vector<int64_t> reflectancesParent;
+  if(slicingParam.is_dependent_unit){
+      pointCountParent = slicingParam.buf.pointCloudParent->getPointCount();
+      reflectancesParent.resize(pointCountParent);
+
+      for (size_t index = 0; index < pointCountParent; ++index) {
+        const auto& reflectance = slicingParam.buf.pointCloudParent->getReflectance(index);
+          reflectancesParent[index] = int32_t(reflectance) << kFixedPointAttributeShift;
+      }
+  }
+
   // decompress
   int zeroRunRem = 0;
   int quantLayer = 0;
+  int quantLayerID = 0;
+  int maxQuantLayerID = int(qpSet.layers.size()) - 1;
+  
+
   for (size_t predictorIndex = 0; predictorIndex < pointCount;
        ++predictorIndex) {
     if (predictorIndex == _lods.numPointsInLod[quantLayer]) {
-      quantLayer = std::min(int(qpSet.layers.size()) - 1, quantLayer + 1);
+      quantLayer = std::min(int(_lods.numPointsInLod.size()) - 1, quantLayer + 1);
+      quantLayerID = std::min(maxQuantLayerID, quantLayerID + 1);
     }
     const uint32_t pointIndex = _lods.indexes[predictorIndex];
-    auto quant = qpSet.quantizers(pointCloud[pointIndex], quantLayer);
+    auto quant = qpSet.quantizers(pointCloud[pointIndex], quantLayerID);
+
 
     if (--zeroRunRem < 0)
       zeroRunRem = decoder.decodeRunLength();
@@ -896,6 +1046,13 @@ AttributeDecoder::decodeReflectancesLift(
   }
 
   // reconstruct
+  
+  if(slicingParam.is_dependent_unit){
+    const size_t startIndex = 0;
+    const size_t endIndex = _lods.numPointsInLod[0];
+    PCCLiftPredict(_lods.predictors, startIndex, endIndex, false, reflectances, &reflectancesParent);  
+  }
+
   for (size_t lodIndex = 1; lodIndex < lodCount; ++lodIndex) {
     const size_t startIndex = _lods.numPointsInLod[lodIndex - 1];
     const size_t endIndex = _lods.numPointsInLod[lodIndex];

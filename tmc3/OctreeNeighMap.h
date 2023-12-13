@@ -67,6 +67,9 @@ public:
     if (childOccupancyEnabled)
       _childOccupancy.reset(new uint8_t[_bufferSizeInBytes << 3]);
     _updates.reserve(1 << 16);
+
+	_maxRange = { _cubeSize , _cubeSize , _cubeSize };
+	_minRange = { 0, 0, 0 };
   }
 
   int cubeSize() const { return _cubeSize; }
@@ -117,8 +120,9 @@ public:
     const int shiftZ) const
   {
     if (
-      x < 0 || x >= _cubeSize || y < 0 || y >= _cubeSize || z < 0
-      || z >= _cubeSize) {
+		x < _minRange[0] || x >= _maxRange[0]
+		|| y < _minRange[1] || y >= _maxRange[1]
+		|| z < _minRange[2] || z >= _maxRange[2]) {
       return false;
     }
     return get(x, y, z, shiftX, shiftY, shiftZ);
@@ -154,6 +158,41 @@ public:
     uint8_t childOccupancy = _childOccupancy[getByteIndex(x, y, z)];
     return childOccupancy;
   }
+
+  Vec3<int> _maxRange = { _cubeSize, _cubeSize, _cubeSize };
+  Vec3<int> _minRange = { 0, 0, 0 };
+
+  int setRange(Vec3<int> bbox_max, Vec3<int> bbox_min, Vec3<int> atlasOrigin, Vec3<int> nodeSizeLog2)
+  {
+	  int changedFlag = 0;
+	  auto bboxSize = bbox_max - bbox_min;
+	  bool setRangeEnabledFlag = !!bboxSize[0] || !!bboxSize[1] || !!bboxSize[2];
+	  if (setRangeEnabledFlag) {
+		  for (int m = 0; m < 3; m++) {
+			  int bboxMaxShift = bbox_max[m] >> nodeSizeLog2[m];
+			  int bboxMinShift = bbox_min[m] >> nodeSizeLog2[m];
+			  int atlasOriginShift = atlasOrigin[m] << _cubeSizeLog2;
+
+			  // _maxRange
+			  if (atlasOriginShift + _cubeSize > bboxMaxShift) {
+				  _maxRange[m] = bboxMaxShift - atlasOriginShift;
+				  changedFlag = 1;
+			  }
+			  else
+				  _maxRange[m] = _cubeSize;
+
+			  // _minRange
+			  if (bboxMinShift > atlasOriginShift) {
+				  _minRange[m] = bboxMinShift - atlasOriginShift;
+				  changedFlag = 1;
+			  }
+			  else
+				  _minRange[m] = 0;
+		  }
+	  }
+	  return changedFlag;
+  }
+
 
 private:
   int32_t getBitIndex(const int32_t x, const int32_t y, const int32_t z) const
@@ -315,7 +354,11 @@ void updateGeometryOccupancyAtlas(
   const ringbuf<PCCOctree3Node>& fifo,
   const ringbuf<PCCOctree3Node>::iterator& fifoCurrLvlEnd,
   MortonMap3D* occupancyAtlas,
-  Vec3<int32_t>* atlasOrigin);
+  Vec3<int32_t>* atlasOrigin, 
+  Vec3<int> bbox_min = { 0, 0, 0 },
+  Vec3<int> bbox_max = { 0, 0, 0 },
+  Vec3<int> nodeSizeLog2 = { 0, 0, 0 },
+  bool bboxChangedFlag = 0);
 
 void updateGeometryOccupancyAtlasOccChild(
   const Vec3<int32_t>& pos,

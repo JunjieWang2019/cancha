@@ -46,6 +46,7 @@
 #include "geometry_predictive.h"
 #include "TMC3.h"
 #include "PCCTMC3Common.h"
+#include "geometry_octree.h"
 namespace pcc {
 
 //============================================================================

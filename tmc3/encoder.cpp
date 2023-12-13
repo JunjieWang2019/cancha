@@ -39,6 +39,8 @@
 #include <limits>
 #include <set>
 #include <stdexcept>
+#include <sstream>
+#include <bitset>
 #include <numeric>
 
 #include "Attribute.h"
@@ -55,13 +57,15 @@
 #include "partitioning.h"
 #include "pcc_chrono.h"
 #include "ply.h"
+#include "PCCMath.h"
+#include "layerGroupSlicing.h"
 #include "TMC3.h"
 namespace pcc {
 
 //============================================================================
 
-PCCPointSet3
-getPartition(const PCCPointSet3& src, const std::vector<int32_t>& indexes);
+template <class T> PCCPointSet3
+getPartition(const PCCPointSet3& src, const std::vector<T>& indexes);
 
 PCCPointSet3 getPartition(
   const PCCPointSet3& src,
@@ -214,6 +218,81 @@ PCCTMC3Encoder3::compress(
         if (aps.spherical_coord_flag)
           aps.attr_coord_scale = attr_coord_scale;
     }
+
+	if (params->lgsp.layerGroupEnabledFlag) {
+
+		_sps = &params->sps;		// temporal sps
+		_gps = &params->gps;		// temporal gps
+
+		SrcMappedPointSet quantInput = quantization(inputPointCloud);
+		
+    //Set layer group slcing parameters by recursive splitting of point cloud
+    bool success = setLayerGroupParams(quantInput.cloud, params->gps, params->geom, params->lgsp);
+    
+    if(success){
+    
+      params->sps.layer_group_enabled_flag = true;      
+
+      //reset some parameters based on encoder settings
+      if(params->root_layer_group_context_ref_flag) {
+        for(auto& refGroupIdlist: params->lgsp.refLayerGroupId)
+          for(auto& refGroupIds: refGroupIdlist)
+            refGroupIds = 0;
+        for(auto& refSubGroupIdlist: params->lgsp.refSubgroupId)
+          for(auto& refSubGroupIds: refSubGroupIdlist)
+            refSubGroupIds = 0;
+        for(auto& refGroupIdlist: params->lgsp.refLayerGroupIdAttribute)
+          for(auto& refGroupIds: refGroupIdlist)
+            refGroupIds = 0;
+        for(auto& refSubGroupIdlist: params->lgsp.refSubgroupIdAttribute)
+          for(auto& refSubGroupIds: refSubGroupIdlist)
+            refSubGroupIds = 0;
+			};
+
+      
+      if(!params->lgsp.attr_ctxt_ref_id_present_flag){
+        params->lgsp.refLayerGroupIdAttribute.clear();
+        params->lgsp.refSubgroupIdAttribute.clear();
+      }
+
+
+      //set sps based on layer group slcing parameters
+		  params->sps.num_layer_groups_minus1 = params->lgsp.numLayerGroupsMinus1;
+		  params->sps.layer_group_id.resize(params->lgsp.numLayerGroupsMinus1 + 1);
+		  params->sps.num_layers_minus1.resize(params->lgsp.numLayerGroupsMinus1 + 1);
+		  params->sps.subgroup_enabled_flag.resize(params->lgsp.numLayerGroupsMinus1 + 1);
+
+			for (int group_id = 0; group_id <= params->lgsp.numLayerGroupsMinus1; group_id++) {
+			  params->sps.layer_group_id[group_id] = group_id;
+        params->sps.num_layers_minus1[group_id] = params->lgsp.numLayersPerLayerGroup[group_id] -1;
+
+        if(group_id>0 && params->lgsp.numSubgroupsMinus1[group_id]>0){
+					params->sps.subgroup_enabled_flag[group_id] = true;         
+        }
+        else{
+					params->sps.subgroup_enabled_flag[group_id] = false;
+        }
+			}
+      
+      params->sps.subgroupBboxOrigin_bits_minus1 = params->lgsp.subgroupBboxOrigin_bits_minus1;
+			params->sps.subgroupBboxSize_bits_minus1 = params->lgsp.subgroupBboxSize_bits_minus1;
+
+
+    }else{
+
+      params->lgsp.layerGroupEnabledFlag = false;
+      params->sps.layer_group_enabled_flag = false;  
+        for (auto& aps : params->aps)
+            aps.layer_group_enabled_flag = false;  
+    }
+
+
+  }	else{
+    
+		params->sps.layer_group_enabled_flag = false;
+        for (auto& aps : params->aps)
+            aps.layer_group_enabled_flag = false;
+  }
 
     // Allocate storage for attribute contexts
     _ctxtMemAttrs.resize(params->sps.attributeSets.size());
@@ -409,6 +488,56 @@ PCCTMC3Encoder3::compress(
     inventory.tile_size_bits_minus1 = numBits(maxValSize) - 1;
 
     callback->onOutputBuffer(write(*_sps, partitions.tileInventory));
+  }
+
+  if (params->lgsp.layerGroupEnabledFlag) {
+	  // layer-group structure inventory parameter setting
+	  LayerGroupStructureInventory layerGroupStructureInventory;
+
+	  layerGroupStructureInventory.lgsi_seq_parameter_set_id = params->sps.sps_seq_parameter_set_id;
+	  layerGroupStructureInventory.lgsi_frame_idx_bits = params->sps.frame_ctr_bits;
+	  layerGroupStructureInventory.lgsi_frame_idx = _frameCounter & ((1 << params->sps.frame_ctr_bits) - 1);
+	  layerGroupStructureInventory.lgsi_num_slice_ids_minus1 = 0;
+
+	  layerGroupStructureInventory.slice_ids.clear();
+	  layerGroupStructureInventory.slice_ids.resize(layerGroupStructureInventory.lgsi_num_slice_ids_minus1 + 1);
+
+	  for (auto& slice : layerGroupStructureInventory.slice_ids) {
+		  slice.lgsi_slice_id = 0;
+		  slice.lgsi_num_layer_groups_minus1 = params->sps.num_layer_groups_minus1;
+		  slice.lgsi_subgroupBboxOrigin_bits_minus1 = params->sps.subgroupBboxOrigin_bits_minus1;
+		  slice.lgsi_subgroupBboxSize_bits_minus1 = numBits(params->lgsp.subgrpBboxSize[0][0].max()) - 1;
+
+		  slice.layerGroups.clear();
+		  slice.layerGroups.resize(slice.lgsi_num_layer_groups_minus1 + 1);
+		  int idx = 0;
+		  for (auto& entry : slice.layerGroups) {
+			  entry.lgsi_layer_group_id = idx;
+			  entry.lgsi_num_layers_minus1 = params->sps.num_layers_minus1[idx];
+			  entry.lgsi_num_subgroups_minus1 = params->lgsp.numSubgroupsMinus1[idx];
+
+			  entry.subgroups.clear();
+			  entry.subgroups.resize(entry.lgsi_num_subgroups_minus1 + 1);
+
+			  for (int i = 0; i < entry.lgsi_num_subgroups_minus1 + 1; i++) {
+				  auto& subentry = entry.subgroups[i];
+				  subentry.lgsi_subgroup_id = i;
+				  subentry.lgsi_subgroupBboxOrigin = params->lgsp.subgrpBboxOrigin[idx][i];
+				  subentry.lgsi_subgroupBboxSize = params->lgsp.subgrpBboxSize[idx][i];
+
+				  if (idx > 1)
+					  subentry.lgsi_parent_subgroup_id = params->lgsp.parentSubgroupId[idx][i];
+				  else
+					  subentry.lgsi_parent_subgroup_id = 0;
+			  }
+			  idx++;
+		  }
+	  }
+
+	  layerGroupStructureInventory.lgsi_origin = _originInCodingCoords;
+	  layerGroupStructureInventory.lgsi_origin_bits_minus1 = numBits(_originInCodingCoords.max()) - 1;
+
+	  callback->onOutputBuffer(write(params->sps, layerGroupStructureInventory));
   }
 
   // Partition the input point cloud
@@ -813,6 +942,9 @@ PCCTMC3Encoder3::fixupParameterSets(EncoderParams* params)
     if (attr_aps.lod_decimation_type == LodDecimationMethod::kCentroid)
       attr_aps.aps_slice_dist2_deltas_present_flag = false;
 
+    if(attr_aps.layer_group_enabled_flag)
+      attr_aps.aps_slice_dist2_deltas_present_flag = false;
+
     // If the lod search ranges are negative, use a full-range search
     // todo(df): lookup level limit
     if (attr_aps.inter_lod_search_range < 0)
@@ -831,7 +963,7 @@ PCCTMC3Encoder3::fixupParameterSets(EncoderParams* params)
       attr_aps.intra_lod_search_range = 0;
 
     // If there are no refinement layers, don't signal an inter search range
-    if (attr_aps.maxNumDetailLevels() == 1)
+    if (attr_aps.maxNumDetailLevels() == 1 && !attr_aps.layer_group_enabled_flag)
       attr_aps.inter_lod_search_range = 0;
 
     // the encoder options may not specify sufficient offsets for the number
@@ -1014,34 +1146,80 @@ PCCTMC3Encoder3::compressPartition(
 
   // geometry encoding
   if (1) {
-    PayloadBuffer payload(PayloadType::kGeometryBrick);
+	std::vector<PayloadBuffer> payloads;
+
+	if (_sps->layer_group_enabled_flag) {
+		for (int i = 0; i <= _sps->num_layer_groups_minus1; i++) {
+			for (int j = 0; j < params->lgsp.numSubgroupsMinus1[i] + 1; j++) {
+				if ((i == 0) && (j == 0))
+					payloads.push_back(PayloadBuffer(PayloadType::kGeometryBrick));
+				else
+					payloads.push_back(PayloadBuffer(PayloadType::kDependentGeometryDataUnit));
+			}
+		}
+	}
+	else
+		payloads.push_back(PayloadBuffer(PayloadType::kGeometryBrick));
 
     pcc::chrono::Stopwatch<pcc::chrono::utime_inc_children_clock> clock_user;
     clock_user.start();
 
-    encodeGeometryBrick(params, &payload);
+	encodeGeometryBrick(params, &payloads, params->lgsp);
 
     clock_user.stop();
 
-    double bpp = double(8 * payload.size()) / inputPointCloud.getPointCount();
-    std::cout << "positions bitstream size " << payload.size() << " B (" << bpp
-              << " bpp)\n";
+	if (_sps->layer_group_enabled_flag) {
+		int sumPayloadSize = 0;
+		int sumNumPoints = 0;
+		int idx = 0;
+		for (auto& payload : payloads) {
+			double bpp = double(8 * payload.size()) / (params->lgsp.numPoints[idx]);
+			std::cout << "FGS " << idx << ": positions bitstream size " << payload.size() << " B (" << bpp
+				<< " bpp)\n";
+
+			sumPayloadSize += payload.size();
+			sumNumPoints += params->lgsp.numPoints[idx++];
+		}
+		std::cout << std::endl;
+
+		double bpp = double(8 * sumPayloadSize) / sumNumPoints;
+		std::cout << "positions bitstream size " << sumPayloadSize << " B (" << bpp
+			<< " bpp)\n";
+	}
+	else {
+		int coded_size = int(payloads[0].size());
+		double bpp = double(8 * coded_size) / inputPointCloud.getPointCount();
+		std::cout << "positions bitstream size " << coded_size << " B (" << bpp
+			<< " bpp)\n";
+	}
 
     auto total_user = std::chrono::duration_cast<std::chrono::milliseconds>(
       clock_user.count());
     std::cout << "positions processing time (user): "
               << total_user.count() / 1000.0 << " s" << std::endl;
 
-    callback->onOutputBuffer(payload);
+	for (auto& payload : payloads)
+		callback->onOutputBuffer(payload);
   }
 
   // verify that the per-level slice constraint has been met
   // todo(df): avoid hard coded value here (should be level dependent)
-  if (params->enforceLevelLimits)
-    if (pointCloud.getPointCount() > 1100000)
-      throw std::runtime_error(
-        std::string("level slice point count limit (1100000) exceeded: ")
-        + std::to_string(pointCloud.getPointCount()));
+  if (params->enforceLevelLimits) {
+	  if (params->lgsp.layerGroupEnabledFlag) {
+		  for (int i = 0; i < params->lgsp.numPoints.size(); i++) {
+			  if (params->lgsp.numPoints[i] > 1100000)
+				  throw std::runtime_error(
+					  std::string("level slice point count limit (1100000) exceeded: ")
+					  + std::to_string(params->lgsp.numPoints[i]));
+		  }
+	  }
+	  else {
+		  if (pointCloud.getPointCount() > 1100000)
+			  throw std::runtime_error(
+				  std::string("level slice point count limit (1100000) exceeded: ")
+				  + std::to_string(pointCloud.getPointCount()));
+	  }
+  }
 
   // recolouring
   // NB: recolouring is required if points are added / removed
@@ -1053,18 +1231,20 @@ PCCTMC3Encoder3::compressPartition(
     }
   }
 
-  // dump recoloured point cloud
+    // dump recoloured point cloud
   // todo(df): this needs to work with partitioned clouds
   callback->onPostRecolour(pointCloud);
-
-  // attributeCoding
-  auto attrEncoder = makeAttributeEncoder();
-
+  
   PCCPointSet3 reconSliceAltPositions;
 
   bool currFrameNotCodedAsB =
     (_gps->biPredictionEnabledFlag
       && !biPredEncodeParams.codeCurrentFrameAsBFrame);
+
+  if(!_sps->layer_group_enabled_flag)
+  {
+    // attributeCoding
+    auto attrEncoder = makeAttributeEncoder();
   // for each attribute
   for (const auto& it : params->attributeIdxMap) {
     int attrIdx = it.second;
@@ -1257,10 +1437,11 @@ PCCTMC3Encoder3::compressPartition(
         attrInterPredParams.referencePointCloud.resize(count);
       }
     }
-
+   
+    AttributeGranularitySlicingParam slicingParam;
     auto& ctxtMemAttr = _ctxtMemAttrs.at(abh.attr_sps_attr_idx);
     attrEncoder->encode(
-      *_sps, attr_sps, attr_aps, abh, ctxtMemAttr, pointCloud, &payload, attrInterPredParams);
+      *_sps, attr_sps, attr_aps, abh, ctxtMemAttr, pointCloud, &payload, attrInterPredParams,slicingParam);
 
     if (reconCloudAlt && attr_aps.spherical_coord_flag && _gps->predgeom_enabled_flag)
       reconCloudAlt->cloud.append(pointCloud, _posSph);
@@ -1293,13 +1474,257 @@ PCCTMC3Encoder3::compressPartition(
     std::cout << label << "s bitstream size " << coded_size << " B (" << bpp
               << " bpp)\n";
 
-    auto time_user = std::chrono::duration_cast<std::chrono::milliseconds>(
-      clock_user.count());
-    std::cout << label
-              << "s processing time (user): " << time_user.count() / 1000.0
-              << " s" << std::endl;
+      auto time_user = std::chrono::duration_cast<std::chrono::milliseconds>(
+          clock_user.count());
+      std::cout << label
+                  << "s processing time (user): " << time_user.count() / 1000.0
+                  << " s" << std::endl;
 
-    callback->onOutputBuffer(payload);
+      callback->onOutputBuffer(payload);
+    }
+
+  }  
+  else{
+  
+    std::vector<AttributeBrickHeader> attr_abh;
+    attr_abh.resize(params->attributeIdxMap.size());
+    
+    
+    int numSubgroups = 0;
+    for (int groupIndex = 0; groupIndex <= _sps->num_layer_groups_minus1; groupIndex++) {    
+      for (int subgroupIndex = 0; subgroupIndex < params->lgsp.numSubgroupsMinus1[groupIndex] + 1; subgroupIndex++){ 
+
+        numSubgroups++;
+      
+      }
+    }
+
+    //setNewDependentUnit was already called in initializeForGeometry
+    _gHandler.initializeForAttribute(params->attributeIdxMap.size(), true);
+    
+
+    for (const auto& it : params->attributeIdxMap) {
+      int attrIdx = it.second;
+      const auto& attr_sps = _sps->attributeSets[attrIdx];
+      const auto& attr_aps = *_aps[attrIdx];
+      const auto& attr_enc = params->attr[attrIdx];
+      const auto& label = attr_sps.attributeLabel;    
+
+      // todo(df): move elsewhere?
+      AttributeBrickHeader abh;
+      abh.attr_attr_parameter_set_id = attr_aps.aps_attr_parameter_set_id;
+      abh.attr_sps_attr_idx = attrIdx;
+      abh.attr_geom_slice_id = _sliceId;
+      abh.attr_qp_delta_luma = 0;
+      abh.attr_qp_delta_chroma = 0;
+      abh.attr_layer_qp_delta_luma = attr_enc.abh.attr_layer_qp_delta_luma;
+      abh.attr_layer_qp_delta_chroma = attr_enc.abh.attr_layer_qp_delta_chroma;
+
+      abh.enableAttrInterPred = false;
+      attrInterPredParams.enableAttrInterPred = false;
+
+      abh.attr_dist2_delta = 0;
+      attr_abh[attrIdx] = abh;
+    }
+
+    
+      
+    std::vector<std::vector<uint64_t>> quantWeights;
+    quantWeights.resize(params->attributeIdxMap.size()); 
+
+
+    bool isReusable = true;
+    
+    for (const auto& it : params->attributeIdxMap) {
+      int attrIdx = it.second;
+      const auto& attr_aps = *_aps[attrIdx];
+      _gHandler.buildLoDSettings(attr_aps, attrIdx);
+        
+    }
+    _gHandler.countChildPoints(params->lgsp.numSubgroupsMinus1);
+
+    if(params->weight_adjustment_enabled_flag){
+      isReusable = _gHandler.computeWeightAdjustmentParametersInEncoder(
+        _aps,attr_abh,
+        params->attributeIdxMap,
+        params->lgsp,
+        params->weight_adjustment_method,
+        quantWeights,
+        pointCloud,
+        _subgroupPointCloud,
+        attrInterPredParams);
+    }
+
+
+    std::vector<pcc::chrono::Stopwatch<pcc::chrono::utime_inc_children_clock>> clock_user;
+    clock_user.resize(params->attributeIdxMap.size());
+    
+    std::vector<int> total_coded_size;
+    total_coded_size.resize(params->attributeIdxMap.size());
+    for (const auto& it : params->attributeIdxMap)
+      total_coded_size[it.second] = 0;
+    
+
+    int idxFGS = 0;  
+    int pointCount=0;
+
+    for(auto curArrayIdx: _gHandler._codingOrder){
+      auto curKey = _gHandler.getLayerGroupIds(curArrayIdx);
+
+      auto groupIndex = curKey.layerGroupID;
+      auto subgroupIndex = curKey.subgroupID;
+    
+      if(_subgroupPointCloud[groupIndex][subgroupIndex].getPointCount()<1){
+        continue;
+      }
+      
+        
+
+      //assign attribute
+      _gHandler.setSubGroupAttribute(curArrayIdx, _subgroupPointCloud[groupIndex][subgroupIndex], pointCloud);
+          
+      auto attrEncoder = makeAttributeEncoder();
+
+      for (const auto& it : params->attributeIdxMap) {    
+      
+        int attrIdx = it.second;
+        const auto& attr_sps = _sps->attributeSets[attrIdx];
+        const auto& attr_aps = *_aps[attrIdx];
+        const auto& attr_enc = params->attr[attrIdx];
+        const auto& label = attr_sps.attributeLabel;
+        
+        PayloadBuffer payload;
+        if(groupIndex==0)
+          payload = PayloadBuffer(PayloadType::kAttributeBrick);
+        else
+          payload = PayloadBuffer(PayloadType::kDependentAttributeDataUnit);
+          
+        clock_user[attrIdx].start();     
+
+         
+
+        int parentArrayIdx = 0;
+        int refArrayIdx = 0;
+        
+        int refGroupId=0;
+        int refSubgroupId=0;
+        int parentGroupId=0;
+        int parentSubgroupId=0;
+
+        if(groupIndex>0){
+            
+          AttributeBrickHeader abh = attr_abh[attrIdx];
+
+          
+          if(attr_aps.attr_ref_id_present_flag){
+
+            refGroupId = params->lgsp.refLayerGroupIdAttribute[groupIndex][subgroupIndex];
+            refSubgroupId = params->lgsp.refSubgroupIdAttribute[groupIndex][subgroupIndex];
+            _gHandler.setNewDependentUnitForAttribute(groupIndex, subgroupIndex, refGroupId, refSubgroupId);
+            refArrayIdx = _gHandler.getReferenceIdxAttribute(curArrayIdx); 
+
+          }else{
+
+            refArrayIdx = _gHandler.getReferenceIdxAttribute(curArrayIdx);                 
+          }
+
+          _gHandler.loadCtxForAttribute(attrIdx,curArrayIdx,refArrayIdx);
+          
+
+          parentArrayIdx = _gHandler.getParentIdx(curArrayIdx);
+          auto parentKey = _gHandler.getLayerGroupIds(parentArrayIdx);
+          parentGroupId = parentKey.layerGroupID;
+          parentSubgroupId = parentKey.subgroupID;
+          
+
+          DependentAttributeDataUnitHeader abh_dep;          
+
+          auto parentPointCloud = _gHandler.getParentPoints(
+            curArrayIdx, parentArrayIdx, _subgroupPointCloud[parentGroupId][parentSubgroupId]);
+
+          AttributeGranularitySlicingParam slicingParam;
+          if(params->weight_adjustment_enabled_flag)
+            _gHandler.setSlicingParamAttrWithWeightAdjustment(attrIdx, curArrayIdx, isReusable, params->attributeIdxMap, &abh_dep, &parentPointCloud, params->weight_adjustment_method, quantWeights, slicingParam);
+          else
+            _gHandler.setSlicingParamAttr(attrIdx, groupIndex, &abh_dep, &parentPointCloud, false, 0, nullptr, nullptr, slicingParam);
+
+          
+          _gHandler.setDependentAttributeHeader(curArrayIdx,attr_aps.aps_slice_qp_deltas_present_flag,params->qpCoefDependentUnits,params->qpLayerCoefDependentUnits, _subgroupPointCloud[groupIndex][subgroupIndex].getPointCount(), slicingParam,abh,abh_dep);
+
+          attrEncoder->encode(
+              *_sps, attr_sps, attr_aps, abh, 
+            *_gHandler._ctxtMemAttrsSaved[attrIdx][curArrayIdx], _subgroupPointCloud[groupIndex][subgroupIndex], 
+            &payload,
+            attrInterPredParams, slicingParam);            
+
+        }
+        else
+        {            
+          _gHandler.resetStoredCtxForAttribute(attrIdx,0);
+
+          AttributeBrickHeader& abh = attr_abh[attrIdx];
+          
+          AttributeGranularitySlicingParam slicingParam;
+          if(params->weight_adjustment_enabled_flag)
+            _gHandler.setSlicingParamAttrWithWeightAdjustment(attrIdx, curArrayIdx, isReusable, params->attributeIdxMap, nullptr, nullptr, params->weight_adjustment_method, quantWeights, slicingParam);
+          else
+            _gHandler.setSlicingParamAttr(attrIdx, groupIndex, nullptr, nullptr, false, 0, nullptr, nullptr, slicingParam);
+          
+          _gHandler.setAttributeHeader(curArrayIdx,attr_aps.aps_slice_qp_deltas_present_flag,params->qpCoefDependentUnits,_subgroupPointCloud[groupIndex][subgroupIndex].getPointCount(), slicingParam,abh);
+
+
+		      attrEncoder->encode(
+			      *_sps, attr_sps, attr_aps, abh,
+			      *_gHandler._ctxtMemAttrsSaved[attrIdx][0],
+			      _subgroupPointCloud[groupIndex][subgroupIndex],
+			      &payload,
+			      attrInterPredParams,slicingParam);     
+        }
+        
+        if(_subgroupPointCloud[groupIndex][subgroupIndex].getPointCount()>0)
+          idxFGS++;     
+
+        _gHandler.releaseAttributeEncoderResource(attrIdx,curArrayIdx, isReusable);
+		                   
+        callback->onOutputBuffer(payload);       
+                
+
+        int coded_size = int(payload.size());
+        total_coded_size[attrIdx] += coded_size;
+        double bpp = double(8 * coded_size) / _subgroupPointCloud[groupIndex][subgroupIndex].getPointCount();
+        std::cout <<"FGS " << idxFGS << ": (" << groupIndex <<"," << subgroupIndex << "): " << label << "s bitstream size " << coded_size << " B (" << bpp << " bpp)\n";
+
+        clock_user[attrIdx].stop();                   
+      }
+        
+      int numDCMPoints = _gHandler.setEncodedAttribute(curArrayIdx, pointCloud, _subgroupPointCloud[groupIndex][subgroupIndex]);
+      pointCount+=numDCMPoints;
+      
+      _gHandler.releaseAttributeEncoderResource(curArrayIdx,_subgroupPointCloud);
+		         
+
+    }
+        
+    for (const auto& it : params->attributeIdxMap)
+    {
+      int attrIdx = it.second;
+      const auto& attr_sps = _sps->attributeSets[attrIdx];
+      const auto& label = attr_sps.attributeLabel;
+
+      double bpp = double(8 * total_coded_size[attrIdx]) / pointCloud.getPointCount();
+      std::cout << label << "s bitstream size " << total_coded_size[attrIdx] << " B (" << bpp
+                  << " bpp)\n";
+
+      auto time_user = std::chrono::duration_cast<std::chrono::milliseconds>(
+          clock_user[attrIdx].count());
+      std::cout << label << "s processing time (user): " << time_user.count() / 1000.0
+                  << " s" << std::endl;   
+    }
+
+    _gHandler.releaseCtxForAttribute();
+    _gHandler.releaseIndexes();
+
+    assert(pointCount == pointCloud.getPointCount());
   }
   auto& refPosSph = currFrameNotCodedAsB
     ? biPredEncodeParams._refPosSph2
@@ -1336,7 +1761,8 @@ PCCTMC3Encoder3::compressPartition(
 
 void
 PCCTMC3Encoder3::encodeGeometryBrick(
-  const EncoderParams* params, PayloadBuffer* buf)
+	const EncoderParams* params, std::vector<PayloadBuffer>* bufs,
+	LayerGroupSlicingParams& layerGroupParams)
 {
   GeometryBrickHeader gbh;
   gbh.geom_geom_parameter_set_id = _gps->gps_geom_parameter_set_id;
@@ -1421,147 +1847,311 @@ PCCTMC3Encoder3::encodeGeometryBrick(
     gbh.rootNodeSizeLog2 = gbh.maxRootNodeDimLog2;
 
   // todo(df): remove estimate when arithmetic codec is replaced
-  int maxAcBufLen = int(pointCloud.getPointCount()) * 3 * 4 + 1024;
+  int maxAcBufLen = std::min(1100000, int(pointCloud.getPointCount())) * 3 * 4 + 1024;
 
   // allocate entropy streams
   std::vector<std::unique_ptr<EntropyEncoder>> arithmeticEncoders;
-  for (int i = 0; i < 1 + gbh.geom_stream_cnt_minus1; i++) {
-    arithmeticEncoders.emplace_back(new EntropyEncoder(maxAcBufLen, nullptr));
-    auto& aec = arithmeticEncoders.back();
-    aec->enableBypassStream(_sps->cabac_bypass_stream_enabled_flag);
-    aec->setBypassBinCodingWithoutProbUpdate(_sps->bypass_bin_coding_without_prob_update);
-    aec->start();
+  if (layerGroupParams.layerGroupEnabledFlag) {
+	  _gHandler = LayerGroupHandler(*_sps);
+
+	  int totalNumUnits = _gHandler.initializeForGeometry(layerGroupParams,params->numSkipLayerGroups);
+	  assert(_gHandler.isRequiredLayer(0));
+
+	  PCCPointSet3 pointCloudTemp;
+	  pointCloudTemp.clear();
+	  pointCloudTemp.addRemoveAttributes(pointCloud.hasColors(), pointCloud.hasReflectances());
+
+	  layerGroupParams.numPoints.reserve(totalNumUnits);
+	  int bufIdx = 0;
+
+	  //depth 1st search
+	  _subgroupPointCloud.resize(layerGroupParams.numLayerGroupsMinus1 + 1);
+	  for (int group_id = 0; group_id <= layerGroupParams.numLayerGroupsMinus1; group_id++) {
+		  _subgroupPointCloud[group_id].resize(layerGroupParams.numSubgroupsMinus1[group_id] + 1);
+	  }
+
+	  std::vector<int> toBeCoded;
+
+	  // make the coding order list
+	  if (params->depth1stSubgroupSearch) {
+		  _gHandler._visited[0] = true;
+		  toBeCoded.push_back(0);
+	  }
+	  else {
+		  for (int group_id = layerGroupParams.numLayerGroupsMinus1; group_id >= 0; group_id--)
+			  for (int subgroup_id = layerGroupParams.numSubgroupsMinus1[group_id]; subgroup_id >= 0; subgroup_id--) {
+				  int curArrayIdx = _gHandler.getArrayId(group_id, subgroup_id);
+				  toBeCoded.push_back(curArrayIdx);
+			  }
+	  }
+
+    _gHandler.setRoi(params->roiEnabledFlag,params->roiPointScale,params->roiSize);
+    
+    if(params->weight_adjustment_enabled_flag && params->weight_adjustment_method==1)
+      _gHandler.initializeDcmNodesIdx(layerGroupParams);
+
+	  while (toBeCoded.size() > 0) {
+		  int curArrayIdx = toBeCoded[toBeCoded.size() - 1];
+		  toBeCoded.pop_back();
+
+		  int group_id = _gHandler.getLayerGroupIds(curArrayIdx).layerGroupID;
+		  int subgroup_id = _gHandler.getLayerGroupIds(curArrayIdx).subgroupID;
+
+		  if(_gHandler.isRequiredLayer(group_id) && _gHandler.checkRoi(curArrayIdx))
+		  {
+			  _gHandler.resetStoredCtxForGeometry(curArrayIdx);
+
+			  DependentGeometryDataUnitHeader dep_gbh;
+			  int curArrayIdx = _gHandler.getArrayId(group_id, subgroup_id);
+			  int refArrayIdx4Context = _gHandler.getReferenceIdx(curArrayIdx);
+			  int refArrayIdx4Parent = _gHandler.getParentIdx(curArrayIdx);
+
+			  if (group_id == 0) {
+				  _gHandler.setGeometryHeader(layerGroupParams, gbh);
+			  }
+			  else {
+				  _gHandler.setDependentGeometryHeader(curArrayIdx, layerGroupParams, gbh, dep_gbh);
+				  _gHandler.loadCtxForGeometry(curArrayIdx, refArrayIdx4Context);
+
+			  }
+        
+        
+        GeometryGranularitySlicingParam slicingParam;
+        _gHandler.setSlicingParamGeom(group_id,subgroup_id,curArrayIdx,refArrayIdx4Parent, layerGroupParams, slicingParam);
+
+
+			  size_t maxPoints = std::min(slicingParam.numPointsInsubgroup, 1100000);
+
+			  arithmeticEncoders.clear();
+			  arithmeticEncoders.emplace_back(new EntropyEncoder(maxPoints * 3 * 4 + 1024, nullptr));
+			  auto& aec = arithmeticEncoders.back();
+			  aec->enableBypassStream(_sps->cabac_bypass_stream_enabled_flag);
+			  aec->start();
+
+			  encodeGeometryOctreeGranularitySlicing(
+				  params->geom, *_gps, gbh, pointCloud,
+				  *_gHandler._ctxtMemSaved[curArrayIdx].get(),
+				  arithmeticEncoders,
+				  _gHandler._nodesSaved[curArrayIdx].get(),
+				  _refFrame, *_sps,
+				  params->interGeom,
+				  dep_gbh,
+				  slicingParam,
+          &_subgroupPointCloud[group_id][subgroup_id]
+			  );
+        
+        _gHandler.storeSlicingParamGeom(curArrayIdx,slicingParam);
+
+        
+        if(params->weight_adjustment_enabled_flag && params->weight_adjustment_method==1)
+          _gHandler.setDcmNodesIdx(curArrayIdx,layerGroupParams,slicingParam);
+
+        _gHandler._codingOrder.push_back(curArrayIdx);
+
+
+			  auto dataLen = arithmeticEncoders[0]->stop();
+			  int num_points = _subgroupPointCloud[group_id][subgroup_id].getPointCount();
+
+			  if (num_points) {
+				  PayloadBuffer& buf = bufs->at(bufIdx++);
+
+				  if (group_id == 0) {
+					  write(*_sps, *_gps, gbh, &buf);
+				  }
+				  else {
+					  write(*_sps, *_gps, dep_gbh, &buf);
+				  }
+				  // write bitstream
+				  auto& aec = arithmeticEncoders[0];
+				  std::copy_n(aec->buffer(), dataLen, std::back_inserter(buf));
+
+				  // signal the actual number of points coded
+				  gbh.footer.geom_num_points_minus1 = num_points - 1;
+
+				  // append the footer
+				  write(*_gps, gbh, gbh.footer, &buf);
+
+				  layerGroupParams.numPoints.push_back(num_points);
+			  }
+
+        _gHandler.setStartIdxForEachOutputPoints(curArrayIdx, pointCloudTemp.getPointCount());
+
+        _gHandler.setEncodedPointIndexToOrgPointIndex(curArrayIdx, slicingParam.buf.encIndexToOrgIndex, _subgroupPointCloud[group_id][subgroup_id]);
+
+
+        pointCloudTemp.append(_gHandler.getOutputPoints(pointCloud.hasColors(), pointCloud.hasReflectances(), curArrayIdx, _subgroupPointCloud[group_id][subgroup_id]));
+
+        _gHandler.countExcludedPoints(curArrayIdx, layerGroupParams, _subgroupPointCloud[group_id][subgroup_id]);
+
+
+        _gHandler.releaseGeometryEncoderResource(curArrayIdx);
+
+
+			  // find next subgroup by depth 1st search
+			  if (params->depth1stSubgroupSearch) {
+				  for (auto idx : _gHandler._idx_uncoded_children_geom[curArrayIdx]) {
+					  if (!_gHandler._visited[idx.first]) {
+						  _gHandler._visited[idx.first] = true;
+						  toBeCoded.push_back(idx.first);
+					  }
+				  }
+			  }
+		  }
+	  }
+
+    _gHandler.setSubGroupPointIndexToEncodedPointIndex(pointCloud);
+
+
+	  pointCloud.swap(pointCloudTemp);
+
+	  if (bufIdx)
+		  bufs->resize(bufIdx);
+
+	  //release all stored ctx
+	  _gHandler.releaseCtxForGeometry();
+	  _gHandler.releaseNodes();
   }
+  else {
+	  for (int i = 0; i < 1 + gbh.geom_stream_cnt_minus1; i++) {
+		  arithmeticEncoders.emplace_back(new EntropyEncoder(maxAcBufLen, nullptr));
+		  auto& aec = arithmeticEncoders.back();
+		  aec->enableBypassStream(_sps->cabac_bypass_stream_enabled_flag);
+		  aec->setBypassBinCodingWithoutProbUpdate(_sps->bypass_bin_coding_without_prob_update);
+		  aec->start();
+	  }
 
-  // forget (reset) all saved context state at boundary
-  if (!gbh.entropy_continuation_flag) {
-    if (
-      !_sps->inter_entropy_continuation_enabled_flag
-      || !gbh.interPredictionEnabledFlag) {
-      _ctxtMemOctreeGeom->reset();
-      _ctxtMemPredGeom->reset();
-      for (auto& ctxtMem : _ctxtMemAttrs)
-        ctxtMem.reset();
-    }
+	  // forget (reset) all saved context state at boundary
+	  if (!gbh.entropy_continuation_flag) {
+		  if (
+			  !_sps->inter_entropy_continuation_enabled_flag
+			  || !gbh.interPredictionEnabledFlag) {
+			  _ctxtMemOctreeGeom->reset();
+			  _ctxtMemPredGeom->reset();
+			  for (auto& ctxtMem : _ctxtMemAttrs)
+				  ctxtMem.reset();
+		  }
+	  }
+
+	  if (_gps->predgeom_enabled_flag) {
+		  _refFrameSph.setInterEnabled(gbh.interPredictionEnabledFlag);
+		  biPredEncodeParams._refFrameSph2.setInterEnabled(gbh.interPredictionEnabledFlag && gbh.biPredictionEnabledFlag);
+		  if (!gbh.interPredictionEnabledFlag) {
+			  if (_gps->globalMotionEnabled) {
+				  _refFrameSph.updateNextMovingStatus(false);
+			  }
+			  _refFrameSph.clearRefFrame();
+			  if (_gps->biPredictionEnabledFlag) {
+				  if (_gps->globalMotionEnabled)
+					  biPredEncodeParams._refFrameSph2.updateNextMovingStatus(false);
+				  biPredEncodeParams._refFrameSph2.clearRefFrame();
+			  }
+			  previousAsInter = false;
+		  }
+		  else {
+			  previousAsInter = true;
+		  }
+		  encodePredictiveGeometry(
+			  params->predGeom, *_gps, gbh, pointCloud, &_posSph, _refFrameSph, biPredEncodeParams._refFrameSph2,
+			  *_ctxtMemPredGeom, arithmeticEncoders[0].get());
+	  }
+	  else if (!_gps->trisoup_enabled_flag) {
+		  encodeGeometryOctree(
+			  params->geom, *_gps, gbh, pointCloud, *_ctxtMemOctreeGeom,
+			  arithmeticEncoders, _refFrame, *_sps, params->interGeom,
+			  biPredEncodeParams);
+	  }
+	  else
+	  {
+		  // limit the number of points to the slice limit
+		  // todo(df): this should be derived from the level
+		  gbh.footer.geom_num_points_minus1 = params->partition.sliceMaxPointsTrisoup - 1;
+		  encodeGeometryTrisoup(
+			  params->trisoup, params->geom, *_gps, gbh, pointCloud, pointCloudPadding,
+			  *_ctxtMemOctreeGeom, arithmeticEncoders, _refFrame,
+			  *_sps, params->interGeom);
+	  }
+	  // signal the actual number of points coded
+	  gbh.footer.geom_num_points_minus1 = pointCloud.getPointCount() - 1;
+
+	  if (_gps->predgeom_enabled_flag && gbh.interPredictionEnabledFlag && _gps->globalMotionEnabled) {
+		  gbh.interFrameRefGmcFlag = _refFrameSph.getFrameMovingState();
+		  if (gbh.biPredictionEnabledFlag)
+			  gbh.interFrameRefGmcFlag2 = biPredEncodeParams._refFrameSph2.getFrameMovingState();
+		  if (_gps->biPredictionEnabledFlag) {
+			  _refFrameSph.getMotionParamsMultiple(gbh.gm_thresh, gbh.gm_matrix, gbh.gm_trans,
+				  biPredEncodeParams.currentFrameIndex, biPredEncodeParams.refFrameIndex);
+			  if (gbh.biPredictionEnabledFlag)
+				  biPredEncodeParams._refFrameSph2.getMotionParamsMultiple(gbh.gm_thresh2, gbh.gm_matrix2, gbh.gm_trans2,
+					  biPredEncodeParams.currentFrameIndex, biPredEncodeParams.refFrameIndex2);
+		  }
+		  else
+			  _refFrameSph.getMotionParams(gbh.gm_thresh, gbh.gm_matrix, gbh.gm_trans);
+	  }
+
+	  attrInterPredParams.frameDistance = 1;
+	  movingState = false;
+	  biPredEncodeParams.movingState2 = false;
+
+	  if (gbh.interPredictionEnabledFlag && params->attributeIdxMap.size()
+		  && _aps[params->attributeIdxMap.begin()->second]->attr_encoding
+		  != AttributeEncoding::kRAHTransform) {
+		  auto checkMovingState =
+			  [&](const VecInt& mat, const pcc::point_t& tran) -> bool {
+			  const double scale = 65536.;
+			  const double thr1_pre = 0.1 / attrInterPredParams.frameDistance;
+			  const double thr2_pre = params->attrInterPredTranslationThreshold;
+
+			  const double thr1_tan_pre = tan(M_PI * thr1_pre / 180);
+			  const double thr1_sin_pre = sin(M_PI * thr1_pre / 180);
+			  const double Rx = std::abs((mat[5] / scale) / (1. + mat[8] / scale));
+			  const double Ry = std::abs(mat[2] / scale);
+			  const double Rz = std::abs((mat[1] / scale) / (1. + mat[0] / scale));
+			  const double Sx = std::abs(tran[0]);
+			  const double Sy = std::abs(tran[1]);
+			  const double Sz = std::abs(tran[2]);
+
+			  return (
+				  Rx < thr1_tan_pre&& Ry < thr1_sin_pre&& Rz < thr1_tan_pre
+				  && Sx < thr2_pre&& Sy < thr2_pre&& Sz < thr2_pre);
+		  };
+
+		  movingState = checkMovingState(gbh.gm_matrix, gbh.gm_trans);
+
+		  if (gbh.biPredictionEnabledFlag) {
+			  biPredEncodeParams.movingState2 =
+				  checkMovingState(gbh.gm_matrix2, gbh.gm_trans2);
+		  }
+	  }
+
+	  // assemble data unit
+	  //  - record the position of each aec buffer for chunk concatenation
+	  std::vector<std::pair<size_t, size_t>> aecStreams;
+	  PayloadBuffer& buf = bufs->at(0);
+	  write(*_sps, *_gps, gbh, &buf);
+	  for (auto& arithmeticEncoder : arithmeticEncoders) {
+		  auto aecLen = arithmeticEncoder->stop();
+		  auto aecBuf = arithmeticEncoder->buffer();
+		  aecStreams.emplace_back(buf.size(), aecLen);
+		  buf.insert(buf.end(), aecBuf, aecBuf + aecLen);
+	  }
+
+	  // This process is performed here from the last chunk to the first.  It
+	  // is also possible to implement this in a forwards direction too.
+	  if (_sps->cabac_bypass_stream_enabled_flag) {
+		  aecStreams.pop_back();
+		  for (auto i = aecStreams.size() - 1; i + 1; i--) {
+			  auto& stream = aecStreams[i];
+			  auto* ptr = reinterpret_cast<uint8_t*>(buf.data());
+			  auto* chunkA = ptr + stream.first + (stream.second & ~0xff);
+			  auto* chunkB = ptr + stream.first + stream.second;
+			  auto* end = ptr + buf.size();
+			  ChunkStreamBuilder::spliceChunkStreams(chunkA, chunkB, end);
+		  }
+	  }
+
+	  // append the footer
+	  write(*_gps, gbh, gbh.footer, &bufs->at(0));
   }
-
-  if (_gps->predgeom_enabled_flag) {
-    _refFrameSph.setInterEnabled(gbh.interPredictionEnabledFlag);
-    biPredEncodeParams._refFrameSph2.setInterEnabled(gbh.interPredictionEnabledFlag && gbh.biPredictionEnabledFlag);
-    if (!gbh.interPredictionEnabledFlag) {    
-      if (_gps->globalMotionEnabled){
-        _refFrameSph.updateNextMovingStatus(false);
-      }
-      _refFrameSph.clearRefFrame(); 
-      if (_gps->biPredictionEnabledFlag){
-        if (_gps->globalMotionEnabled)
-          biPredEncodeParams._refFrameSph2.updateNextMovingStatus(false);
-        biPredEncodeParams._refFrameSph2.clearRefFrame();         
-      }
-      previousAsInter = false;
-    }
-    else{
-      previousAsInter = true;
-    }
-    encodePredictiveGeometry(
-      params->predGeom, *_gps, gbh, pointCloud, &_posSph, _refFrameSph, biPredEncodeParams._refFrameSph2,
-      *_ctxtMemPredGeom, arithmeticEncoders[0].get());
-  } else if (!_gps->trisoup_enabled_flag) {
-    encodeGeometryOctree(
-      params->geom, *_gps, gbh, pointCloud, *_ctxtMemOctreeGeom,
-      arithmeticEncoders, _refFrame, *_sps, params->interGeom,
-      biPredEncodeParams);
-  }
-  else
-  {
-    // limit the number of points to the slice limit
-    // todo(df): this should be derived from the level
-    gbh.footer.geom_num_points_minus1 = params->partition.sliceMaxPointsTrisoup - 1;
-    encodeGeometryTrisoup(
-      params->trisoup, params->geom, *_gps, gbh, pointCloud, pointCloudPadding,
-      *_ctxtMemOctreeGeom, arithmeticEncoders, _refFrame,
-      *_sps, params->interGeom);
-  }
-  // signal the actual number of points coded
-  gbh.footer.geom_num_points_minus1 = pointCloud.getPointCount() - 1;
-
-  if ( _gps->predgeom_enabled_flag && gbh.interPredictionEnabledFlag && _gps->globalMotionEnabled) {
-    gbh.interFrameRefGmcFlag = _refFrameSph.getFrameMovingState();
-    if (gbh.biPredictionEnabledFlag)
-      gbh.interFrameRefGmcFlag2 = biPredEncodeParams._refFrameSph2.getFrameMovingState();
-    if (_gps->biPredictionEnabledFlag){
-      _refFrameSph.getMotionParamsMultiple(gbh.gm_thresh, gbh.gm_matrix, gbh.gm_trans,
-        biPredEncodeParams.currentFrameIndex, biPredEncodeParams.refFrameIndex);
-      if (gbh.biPredictionEnabledFlag)
-        biPredEncodeParams._refFrameSph2.getMotionParamsMultiple(gbh.gm_thresh2, gbh.gm_matrix2, gbh.gm_trans2,
-        biPredEncodeParams.currentFrameIndex, biPredEncodeParams.refFrameIndex2);
-    }
-    else
-      _refFrameSph.getMotionParams(gbh.gm_thresh, gbh.gm_matrix, gbh.gm_trans);
-  }
-
-  attrInterPredParams.frameDistance = 1;
-  movingState = false;
-  biPredEncodeParams.movingState2 = false;
-
-  if (gbh.interPredictionEnabledFlag && params->attributeIdxMap.size()
-    && _aps[params->attributeIdxMap.begin()->second]->attr_encoding
-    != AttributeEncoding::kRAHTransform) {
-    auto checkMovingState =
-      [&](const VecInt& mat, const pcc::point_t& tran) -> bool {
-      const double scale = 65536.;
-      const double thr1_pre = 0.1 / attrInterPredParams.frameDistance;
-      const double thr2_pre = params->attrInterPredTranslationThreshold;
-
-      const double thr1_tan_pre = tan(M_PI * thr1_pre / 180);
-      const double thr1_sin_pre = sin(M_PI * thr1_pre / 180);
-      const double Rx = std::abs((mat[5] / scale) / (1. + mat[8] / scale));
-      const double Ry = std::abs(mat[2] / scale);
-      const double Rz = std::abs((mat[1] / scale) / (1. + mat[0] / scale));
-      const double Sx = std::abs(tran[0]);
-      const double Sy = std::abs(tran[1]);
-      const double Sz = std::abs(tran[2]);
-
-      return (
-        Rx < thr1_tan_pre&& Ry < thr1_sin_pre&& Rz < thr1_tan_pre
-        && Sx < thr2_pre&& Sy < thr2_pre&& Sz < thr2_pre);
-    };
-
-    movingState = checkMovingState(gbh.gm_matrix, gbh.gm_trans);
-
-    if (gbh.biPredictionEnabledFlag) {
-      biPredEncodeParams.movingState2 =
-        checkMovingState(gbh.gm_matrix2, gbh.gm_trans2);
-    }
-  }
-
-  // assemble data unit
-  //  - record the position of each aec buffer for chunk concatenation
-  std::vector<std::pair<size_t, size_t>> aecStreams;
-  write(*_sps, *_gps, gbh, buf);
-  for (auto& arithmeticEncoder : arithmeticEncoders) {
-    auto aecLen = arithmeticEncoder->stop();
-    auto aecBuf = arithmeticEncoder->buffer();
-    aecStreams.emplace_back(buf->size(), aecLen);
-    buf->insert(buf->end(), aecBuf, aecBuf + aecLen);
-  }
-
-  // This process is performed here from the last chunk to the first.  It
-  // is also possible to implement this in a forwards direction too.
-  if (_sps->cabac_bypass_stream_enabled_flag) {
-    aecStreams.pop_back();
-    for (auto i = aecStreams.size() - 1; i + 1; i--) {
-      auto& stream = aecStreams[i];
-      auto* ptr = reinterpret_cast<uint8_t*>(buf->data());
-      auto* chunkA = ptr + stream.first + (stream.second & ~0xff);
-      auto* chunkB = ptr + stream.first + stream.second;
-      auto* end = ptr + buf->size();
-      ChunkStreamBuilder::spliceChunkStreams(chunkA, chunkB, end);
-    }
-  }
-
-  // append the footer
-  write(*_gps, gbh, gbh.footer, buf);
 
   // Cache gbh for later reference
   _gbh = gbh;
@@ -1614,8 +2204,9 @@ PCCTMC3Encoder3::quantization(const PCCPointSet3& src)
 //----------------------------------------------------------------------------
 // get the partial point cloud according to required point indexes
 
+template <class T>
 PCCPointSet3
-getPartition(const PCCPointSet3& src, const std::vector<int32_t>& indexes)
+getPartition(const PCCPointSet3& src, const std::vector<T>& indexes)
 {
   PCCPointSet3 dst;
   dst.addRemoveAttributes(src);

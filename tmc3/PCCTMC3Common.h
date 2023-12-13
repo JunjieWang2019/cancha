@@ -41,6 +41,7 @@
 #include "constants.h"
 #include "hls.h"
 #include "geometry_predictive.h"
+#include "ringbuf.h"
 
 #include "nanoflann.hpp"
 
@@ -48,8 +49,12 @@
 #include <cstddef>
 #include <memory>
 #include <vector>
+#include <unordered_map>
 
 namespace pcc {
+  
+struct PCCOctree3Node;
+struct OctreePlanarState;
 
 //============================================================================
 // Hierachichal bounding boxes.
@@ -199,6 +204,8 @@ struct PCCNeighborInfo {
   uint32_t pointIndex;
   bool interFrameRef;
 
+  bool inTheSameSubgroupFlag = true;
+
   bool operator<(const PCCNeighborInfo& rhs) const
   {
     return weight < rhs.weight;
@@ -218,6 +225,57 @@ struct PredBufRAHT {
   std::vector<std::vector<NodeInfoRAHT>> node;
 };
 
+//---------------------------------------------------------------------------
+
+struct GeometryGranularitySlicingBuf {
+
+  pcc::ringbuf<PCCOctree3Node>* refNodes;
+  std::vector<int>* curPhiBuffer;
+  OctreePlanarState* curPlanar;
+  std::vector<bool> planarEligibleKOctreeDepth_perLayer;
+
+  
+	std::vector<std::vector<uint32_t>> dcmNodesIdx;
+  std::vector<uint32_t> encIndexToOrgIndex;
+  
+};
+
+struct GeometryGranularitySlicingParam {
+  bool layer_group_enabled_flag = false;
+  int startDepth = 0;
+  int endDepth = 0;
+  pcc::point_t bboxMin;
+  pcc::point_t bboxMax;
+  
+  Vec3<uint32_t> posQuantBitMasksLastLayer = 0xffffffff;
+
+  uint32_t numDCMPointsSubgroup;
+  int numPointsInsubgroup;
+  bool planarEligibleKOctreeDepth;
+  int nodesBeforePlanarUpdate;
+
+  GeometryGranularitySlicingBuf buf;
+};
+
+struct AttributeGranularitySlicingBuf {
+  
+  std::vector<uint32_t>* subGroupPointIndexToOrgPredictorIndex;
+  std::vector<uint64_t>* orgWeight;
+  PCCPointSet3* pointCloudParent;
+  DependentAttributeDataUnitHeader* abh_dep;
+  
+};
+
+struct AttributeGranularitySlicingParam {
+  bool layer_group_enabled_flag = false;
+  bool is_dependent_unit = false;
+  int minGeomNodeSizeLog2=0;
+  int maxLevel=0;
+  bool subgroup_weight_adjustment_enabled_flag=false;
+  int subgroup_weight_adjustment_method=0;
+
+  AttributeGranularitySlicingBuf buf;
+};
 //---------------------------------------------------------------------------
 
 struct AttributeInterPredBufRAHT {
@@ -522,6 +580,10 @@ struct PCCPredictor {
   uint32_t neighborCount;
   PCCNeighborInfo neighbors[kAttributePredictionMaxNeighbourCount];
   int8_t predMode;
+  bool isPredFromParent;
+
+  int curLayerGroup;
+  int curSubgroup;
 
   Vec3<attr_t> predictColor(
     const PCCPointSet3& pointCloud, const std::vector<uint32_t>& indexes) const
@@ -708,7 +770,96 @@ struct PCCPredictor {
     memset(
       neighbors, 0,
       sizeof(PCCNeighborInfo) * kAttributePredictionMaxNeighbourCount);
+    isPredFromParent = false;
   }
+
+  //==================================================================================
+  void
+	  blendWeights(const PCCPointSet3& cloud, const std::vector<uint32_t>& indexes
+		  , const AttributeInterPredParams& attrInterPredParams
+		  , int shiftCurrent, int shiftParent, Vec3<int> bbox_min, Vec3<int> bbox_max)
+  {
+	  int w0 = neighbors[0].weight;
+	  int w1 = neighbors[1].weight;
+	  int w2 = neighbors[2].weight;
+
+	  if (neighborCount != 3)
+		  return;
+
+	  point_t neigh0Pos, neigh1Pos, neigh2Pos;
+	  if (attrInterPredParams.enableAttrInterPred) {
+		  const uint32_t neighIdx[3] = {
+			neighbors[0].pointIndex, neighbors[1].pointIndex,
+			neighbors[2].pointIndex };
+		  const PCCPointSet3* refCloud[3];
+		  for (auto i = 0; i < 3; i++)
+			  refCloud[i] = neighbors[i].interFrameRef
+			  ? &attrInterPredParams.referencePointCloud
+			  : &cloud;
+		  neigh0Pos = (*refCloud[0])[neighIdx[0]];
+		  neigh1Pos = (*refCloud[1])[neighIdx[1]];
+		  neigh2Pos = (*refCloud[2])[neighIdx[2]];
+	  }
+	  else {
+		  neigh0Pos = cloud[indexes[neighbors[0].predictorIndex]];
+		  neigh1Pos = cloud[indexes[neighbors[1].predictorIndex]];
+		  neigh2Pos = cloud[indexes[neighbors[2].predictorIndex]];
+	  }
+
+	  //auto neigh0Pos = cloud[indexes[neighbors[0].predictorIndex]];
+	  //auto neigh1Pos = cloud[indexes[neighbors[1].predictorIndex]];
+	  //auto neigh2Pos = cloud[indexes[neighbors[2].predictorIndex]];
+
+	  if (shiftCurrent > 0 || shiftParent > 0) {
+		  if (!(neigh0Pos.x() >= bbox_min.x() && neigh0Pos.x() < bbox_max.x()
+			  && neigh0Pos.y() >= bbox_min.y() && neigh0Pos.y() < bbox_max.y()
+			  && neigh0Pos.z() >= bbox_min.z() && neigh0Pos.z() < bbox_max.z()))
+			  neigh0Pos = (neigh0Pos >> shiftParent) << shiftParent;
+		  else
+			  neigh0Pos = (neigh0Pos >> shiftCurrent) << shiftCurrent;
+
+		  if (!(neigh1Pos.x() >= bbox_min.x() && neigh1Pos.x() < bbox_max.x()
+			  && neigh1Pos.y() >= bbox_min.y() && neigh1Pos.y() < bbox_max.y()
+			  && neigh1Pos.z() >= bbox_min.z() && neigh1Pos.z() < bbox_max.z()))
+			  neigh1Pos = (neigh1Pos >> shiftParent) << shiftParent;
+		  else
+			  neigh1Pos = (neigh1Pos >> shiftCurrent) << shiftCurrent;
+
+		  if (!(neigh2Pos.x() >= bbox_min.x() && neigh2Pos.x() < bbox_max.x()
+			  && neigh2Pos.y() >= bbox_min.y() && neigh2Pos.y() < bbox_max.y()
+			  && neigh2Pos.z() >= bbox_min.z() && neigh2Pos.z() < bbox_max.z()))
+			  neigh2Pos = (neigh2Pos >> shiftParent) << shiftParent;
+		  else
+			  neigh2Pos = (neigh2Pos >> shiftCurrent) << shiftCurrent;
+	  }
+
+	  constexpr bool variant = 1;
+	  const auto d = variant ? 10 : 8;
+	  const auto bb = variant ? 1 : 4;
+	  const auto cc = variant ? 5 : 4;
+
+	  auto dist01 = (neigh0Pos - neigh1Pos).getNorm2<int64_t>();
+	  auto dist02 = (neigh0Pos - neigh2Pos).getNorm2<int64_t>();
+	  auto& dist10 = dist01;
+	  auto dist12 = (neigh1Pos - neigh2Pos).getNorm2<int64_t>();
+	  auto& dist20 = dist02;
+	  auto& dist21 = dist12;
+
+	  auto b1 = dist01 <= dist02 ? bb : cc;
+	  auto b2 = dist10 <= dist12 ? cc : bb;
+	  auto b3 = dist20 <= dist21 ? bb : cc;
+
+	  Vec3<int> w;
+	  w[0] = (w0 * d + w1 * (16 - d - b2) + w2 * b3) >> 4;
+	  w[1] = (w0 * b1 + w1 * d + w2 * (16 - d - b3)) >> 4;
+	  w[2] = 256 - w[0] - w[1];
+
+	  for (int i = 0; i < 3; i++)
+		  neighbors[i].weight = w[i];
+  }
+  //========================================================================================
+
+
 };
 
 //---------------------------------------------------------------------------
@@ -722,9 +873,17 @@ PCCLiftPredict(
   const bool direct,
   std::vector<T>& attributes
   , bool interRef
-  , std::vector<T>& attributesRef
-  )
+  , std::vector<T>& attributesRef,
+  std::vector<T>* attributesParent=NULL)
 {
+
+  std::vector<T>* ref_attributes;
+
+  if(attributesParent)
+      ref_attributes = attributesParent;
+  else
+      ref_attributes = &attributes;
+
   const size_t predictorCount = endIndex - startIndex;
   for (size_t index = 0; index < predictorCount; ++index) {
     const size_t predictorIndex = predictorCount - index - 1 + startIndex;
@@ -740,8 +899,8 @@ PCCLiftPredict(
       }
       const size_t neighborPredIndex = predictor.neighbors[i].predictorIndex;
       const uint32_t weight = predictor.neighbors[i].weight;
-      assert(neighborPredIndex < startIndex);
-      predicted += weight * attributes[neighborPredIndex];
+      assert(neighborPredIndex < startIndex || (attributesParent && (neighborPredIndex < ref_attributes->size())) );
+      predicted += weight * (*ref_attributes)[neighborPredIndex];
     }
     predicted = divExp2RoundHalfInf(predicted, kFixedPointWeightShift);
     if (direct) {
@@ -761,12 +920,13 @@ PCCLiftPredict(
   const size_t startIndex,
   const size_t endIndex,
   const bool direct,
-  std::vector<T>& attributes)
+  std::vector<T>& attributes,
+  std::vector<T>* attributesParent=NULL)
 {
   std::vector<T> attributesRef;
   PCCLiftPredict(
     predictors, startIndex, endIndex, direct, attributes, false,
-    attributesRef);
+    attributesRef, attributesParent);
 }
 
 //---------------------------------------------------------------------------
@@ -809,15 +969,19 @@ PCCLiftUpdate(
   }
   for (size_t predictorIndex = 0; predictorIndex < startIndex;
        ++predictorIndex) {
-    const uint32_t sumWeights = updateWeights[predictorIndex];
-    if (sumWeights) {
-      auto& update = updates[predictorIndex];
-      update = divApprox(update, sumWeights, 0);
-      auto& attribute = attributes[predictorIndex];
-      if (direct) {
-        attribute += update;
-      } else {
-        attribute -= update;
+
+    if(!predictors[predictorIndex].isPredFromParent){
+
+      const uint32_t sumWeights = updateWeights[predictorIndex];
+      if (sumWeights) {
+        auto& update = updates[predictorIndex];
+        update = divApprox(update, sumWeights, 0);
+        auto& attribute = attributes[predictorIndex];
+        if (direct) {
+          attribute += update;
+        } else {
+          attribute -= update;
+        }
       }
     }
   }
@@ -841,6 +1005,9 @@ PCCComputeQuantizationWeights(
     const size_t predictorIndex = pointCount - i - 1;
     const auto& predictor = predictors[predictorIndex];
     const auto currentQuantWeight = quantizationWeights[predictorIndex];
+
+
+    if(!predictor.isPredFromParent)
     for (size_t j = 0; j < predictor.neighborCount; ++j) {
       if(interRef && predictor.neighbors[j].interFrameRef) 
         continue;
@@ -909,6 +1076,7 @@ computeQuantizationWeights(
     const size_t predictorIndex = pointCount - i - 1;
     const auto& predictor = predictors[predictorIndex];
     const auto currentQuantWeight = quantizationWeights[predictorIndex];
+    if(!predictor.isPredFromParent)
     for (size_t j = 0; j < predictor.neighborCount; ++j) {
       if (interRef && predictor.neighbors[j].interFrameRef)
         continue;
@@ -938,6 +1106,9 @@ decideNeighborWithColor(
     const auto pointIndex = indexes[predictorIndex];
     const Vec3<attr_t> color = pointCloud.getColor(pointIndex);
     const auto bpoint = pointCloud[pointIndex];
+
+    if(predictor.isPredFromParent) 
+      continue;
 
     for (size_t j = 0; j < predictor.neighborCount; ++j) {
       auto pointIndex = predictor.neighbors[j].pointIndex;
@@ -982,6 +1153,9 @@ decideNeighborWithRefl(
     const auto pointIndex = indexes[predictorIndex];
     const auto ref = pointCloud.getReflectance(pointIndex);
     const auto bpoint = pointCloud[pointIndex];
+    
+    if(predictor.isPredFromParent) 
+      continue;
 
     for (size_t j = 0; j < predictor.neighborCount; ++j) {
       auto pointIndex = predictor.neighbors[j].pointIndex;
@@ -1009,6 +1183,176 @@ decideNeighborWithRefl(
     }
   }
 }
+
+//---------------------------------------------------------------------------
+inline void
+computeWeightAdjustmentLSM(
+  const std::vector<PCCPredictor>& predictors,
+  std::vector<uint64_t>& quantizationWeights,
+  const Vec3<int32_t> neighWeight,
+  int64_t& subgroup_weight_adj_coeff_a,
+  int64_t& subgroup_weight_adj_coeff_b,
+  const std::vector<uint32_t>& indexes,
+  const std::vector<uint32_t>* subGroupPointIndexToOrgPredictorIndex,
+  const std::vector<uint64_t>* quantizationWeightsOrg,
+  const size_t startIndexOfBottomLevel=0
+  )
+{
+  const size_t pointCount = predictors.size();
+
+
+  std::vector<uint32_t> numRefNodes;
+  numRefNodes.resize(pointCount);
+  uint32_t maxRefNodes =0;
+
+  for (size_t predictorIndex = 0; predictorIndex < pointCount; ++predictorIndex) {
+    const auto& predictor = predictors[predictorIndex];
+
+    if(!predictor.isPredFromParent)
+    for (size_t j = 0; j < predictor.neighborCount; ++j) {
+      const size_t neighborPredIndex = predictor.neighbors[j].predictorIndex;
+      numRefNodes[neighborPredIndex]++;
+
+      if(maxRefNodes<numRefNodes[neighborPredIndex])
+        maxRefNodes = numRefNodes[neighborPredIndex];
+    }
+  
+  }
+
+  if(!maxRefNodes) {
+    subgroup_weight_adj_coeff_a = 0;
+    subgroup_weight_adj_coeff_b = 0;
+    return;
+  }
+  
+  double sum_xy =0;
+  double sum_x = 0;
+  double sum_y = 0;
+  double sum_x2 = 0;
+
+    
+  for (size_t predictorIndex = 0; predictorIndex < pointCount; ++predictorIndex) {
+    //const auto& predictor = predictors[predictorIndex];
+    const uint32_t pointIndex = indexes[predictorIndex];
+    const uint32_t predictorIndexOrg = (*subGroupPointIndexToOrgPredictorIndex)[pointIndex];
+
+
+    double y = (double)(*quantizationWeightsOrg)[predictorIndexOrg] - (double)quantizationWeights[predictorIndex];
+    double x = (double)numRefNodes[predictorIndex]/(double)maxRefNodes;
+
+    sum_xy += x*y;
+    sum_x += x;
+    sum_y += y;
+    sum_x2 += x*x;
+
+    
+  }
+
+  double base = (pointCount * sum_x2 - sum_x*sum_x);
+
+  if(!base){
+    subgroup_weight_adj_coeff_a = 0;
+    subgroup_weight_adj_coeff_b = 0;
+    return;
+  }
+
+  subgroup_weight_adj_coeff_a = (pointCount * sum_xy - sum_x * sum_y)/ base; 
+  subgroup_weight_adj_coeff_b = (sum_x2*sum_y - sum_xy*sum_x)/base;
+  
+
+
+
+  if(subgroup_weight_adj_coeff_a || subgroup_weight_adj_coeff_b){
+    for (size_t predictorIndex = 0; predictorIndex < pointCount; ++predictorIndex) {
+      
+      int64_t offset = (numRefNodes[predictorIndex]*subgroup_weight_adj_coeff_a)/maxRefNodes + subgroup_weight_adj_coeff_b;
+      
+      int64_t updatedWeight = quantizationWeights[predictorIndex] + offset;
+
+      if( updatedWeight >= (1<<kFixedPointWeightShift))
+        quantizationWeights[predictorIndex] = updatedWeight;
+
+    }
+  
+  }
+}
+
+//---------------------------------------------------------------------------
+inline void
+updateQuantizationWeights(
+  const std::vector<PCCPredictor>& predictors,
+  std::vector<uint64_t>& quantizationWeights,
+  Vec3<int32_t> neighWeight,
+  int64_t subgroup_weight_adj_coeff_a,
+  int64_t subgroup_weight_adj_coeff_b)
+{
+
+  const size_t pointCount = predictors.size();
+  std::vector<uint32_t> numRefNodes;
+  numRefNodes.resize(pointCount);
+  uint32_t maxRefNodes =0;
+
+  for (size_t i = 0; i < pointCount; ++i) {
+    const size_t predictorIndex = pointCount - i - 1;
+    const auto& predictor = predictors[predictorIndex];
+
+    if(!predictor.isPredFromParent)
+    for (size_t j = 0; j < predictor.neighborCount; ++j) {
+      const size_t neighborPredIndex = predictor.neighbors[j].predictorIndex;
+      numRefNodes[neighborPredIndex]++;
+
+      if(maxRefNodes<numRefNodes[neighborPredIndex])
+        maxRefNodes = numRefNodes[neighborPredIndex];
+    }
+  }
+  
+  for (size_t i = 0; i < pointCount; ++i) {
+    
+    if(maxRefNodes){
+
+      int64_t offset = (numRefNodes[i]*subgroup_weight_adj_coeff_a)/maxRefNodes + subgroup_weight_adj_coeff_b;
+    
+      int64_t updatedWeight = quantizationWeights[i] + offset;
+
+      if( updatedWeight >= (1<<kFixedPointWeightShift))
+          quantizationWeights[i] += offset;
+      
+    }
+  }
+
+}
+//---------------------------------------------------------------------------
+
+inline int
+setWeightAdjustmentParameters(
+  AttributeGranularitySlicingParam &slicingParam, 
+  const std::vector<PCCPredictor>& predictors,
+  std::vector<uint64_t>& quantWeights,
+  Vec3<int32_t> neighWeight,
+  const std::vector<uint32_t>& indexes,
+  const size_t startIndexOfBottomLevel,
+  int64_t& subgroup_weight_adj_coeff_a, 
+  int64_t& subgroup_weight_adj_coeff_b){
+  
+
+    if(slicingParam.subgroup_weight_adjustment_method==1){
+        
+      updateQuantizationWeights(predictors, quantWeights, neighWeight,subgroup_weight_adj_coeff_a,subgroup_weight_adj_coeff_b);
+
+    }else{
+      computeWeightAdjustmentLSM(predictors, quantWeights, neighWeight,
+        subgroup_weight_adj_coeff_a,
+        subgroup_weight_adj_coeff_b,
+        indexes, slicingParam.buf.subGroupPointIndexToOrgPredictorIndex,slicingParam.buf.orgWeight,startIndexOfBottomLevel);    
+      
+    }
+    if(subgroup_weight_adj_coeff_a || subgroup_weight_adj_coeff_b)
+      return true;
+    else
+      return false;
+
+}
+//---------------------------------------------------------------------------
 
 inline point_t
 clacIntermediatePosition(
@@ -1251,7 +1595,8 @@ computeNearestNeighbors(
   const std::vector<MortonCodeWithIndex>& packedVoxelRef,
   int32_t startIndexRef,
   int32_t endIndexRef,
-  std::vector<uint32_t>& indexesRef)
+  std::vector<uint32_t>& indexesRef,
+  bool skipIntra=false)
 {
   constexpr auto searchRangeNear = 2;
   constexpr auto bucketSizeLog2 = 5;
@@ -1259,7 +1604,7 @@ computeNearestNeighbors(
   constexpr auto bucketSizeMinus1 = bucketSize - 1;
   constexpr auto levelCount = 3;
 
-  const int32_t shiftBits = aps.scalable_lifting_enabled_flag
+  const int32_t shiftBits = aps.scalable_lifting_enabled_flag || aps.layer_group_enabled_flag
     ? 1 + lodIndex
     : 1 + aps.dist2 + abh.attr_dist2_delta + lodIndex;
   const int32_t shiftBits3 = 3 * shiftBits;
@@ -1341,7 +1686,7 @@ computeNearestNeighbors(
   hBBoxes.update();
 
   BoxHierarchy<bucketSizeLog2, levelCount> hIntraBBoxes;
-  if (lodIndex >= aps.intra_lod_prediction_skip_layers) {
+  if (lodIndex >= aps.intra_lod_prediction_skip_layers && !skipIntra) {
     hIntraBBoxes.resize(indexesSize);
     for (int32_t i = startIndex, b = 0; i < endIndex; ++b) {
       hIntraBBoxes.insert(biasedPos[indexes[i]], i - startIndex);
@@ -1622,7 +1967,7 @@ computeNearestNeighbors(
       }
     }
 
-    if (lodIndex >= aps.intra_lod_prediction_skip_layers) {
+    if ( (lodIndex >= aps.intra_lod_prediction_skip_layers) && !skipIntra) {
       const int32_t k00 = i + 1;
       const int32_t k01 = std::min(endIndex - 1, k00 + searchRangeNear);
       for (int32_t k = k00; k <= k01; ++k) {
@@ -2064,9 +2409,192 @@ computeNearestNeighbors(
   computeNearestNeighbors(
     aps, abh, packedVoxel, retained, startIndex, endIndex, lodIndex, indexes,
     predictors, pointIndexToPredictorIndex, predIndex, atlas, interAtlas, false,
-    packedVoxelRef,  startIndexRef, endIndexRef, indexesRef);
+    packedVoxelRef,  startIndexRef, endIndexRef, indexesRef,false);
 }
 
+//---------------------------------------------------------------------------
+
+inline void
+computeNearestNeighbors(
+  const AttributeParameterSet& aps,
+  const AttributeBrickHeader& abh,
+  const std::vector<MortonCodeWithIndex>& packedVoxel,
+  const std::vector<uint32_t>& retained,
+  int32_t startIndex,
+  int32_t endIndex,
+  int32_t lodIndex,
+  std::vector<uint32_t>& indexes,
+  std::vector<PCCPredictor>& predictors,
+  std::vector<uint32_t>& pointIndexToPredictorIndex,
+  int32_t& predIndex,
+  MortonIndexMap3d& atlas,
+  MortonIndexMap3d& interAtlas,
+  bool skipIntra=false)
+{
+  std::vector<MortonCodeWithIndex> packedVoxelRef = {};
+  int32_t startIndexRef = 0;
+  int32_t endIndexRef = 0;
+  std::vector<uint32_t> indexesRef = {};
+  computeNearestNeighbors(
+    aps, abh, packedVoxel, retained, startIndex, endIndex, lodIndex, indexes,
+    predictors, pointIndexToPredictorIndex, predIndex, atlas, interAtlas, false,
+    packedVoxelRef, startIndexRef, endIndexRef, indexesRef, skipIntra);
+}
+
+//---------------------------------------------------------------------------
+
+
+inline void
+computeJustIndex(
+  const AttributeParameterSet& aps,
+  const AttributeBrickHeader& abh,
+  const std::vector<MortonCodeWithIndex>& packedVoxel,
+  const std::vector<uint32_t>& retained,
+  int32_t startIndex,
+  int32_t endIndex,
+  int32_t lodIndex,
+  std::vector<uint32_t>& indexes,
+  std::vector<PCCPredictor>& predictors,
+  int32_t& predIndex,
+  MortonIndexMap3d& atlas)
+{
+
+  const int32_t shiftBits = aps.scalable_lifting_enabled_flag || aps.layer_group_enabled_flag
+    ? 1 + lodIndex
+    : 1 + aps.dist2 + abh.attr_dist2_delta + lodIndex;
+  const int32_t shiftBits3 = 3 * shiftBits;
+  const int32_t log2CubeSize = atlas.cubeSizeLog2();
+  const int32_t atlasBits = 3 * log2CubeSize;
+  // NB: when the atlas boundary is greater than 2^63, all points belong
+  //     to a single atlas.  The clipping is necessary to avoid undefined
+  //     behaviour of shifts greater than or equal to the word size.
+  const int32_t atlasBoundaryBit = std::min(63, shiftBits3 + atlasBits);
+
+  const int32_t retainedSize = retained.size();
+  const int32_t indexesSize = endIndex - startIndex;
+
+
+  // The point positions biased by lodNieghBias
+  // todo(df): preserve this
+  std::vector<point_t> biasedPos;
+  biasedPos.reserve(packedVoxel.size());
+  for (const auto& src : packedVoxel) {
+    //auto point = clacIntermediatePosition(
+    //  aps.scalable_lifting_enabled_flag || aps.layer_group_enabled_flag, lodIndex, src.position);
+    auto point = clacIntermediatePosition(
+      aps.scalable_lifting_enabled_flag, lodIndex, src.position);
+    biasedPos.push_back(times(point, aps.lodNeighBias));
+  }
+
+  atlas.reserve(retainedSize);
+  std::vector<int32_t> neighborIndexes;
+  neighborIndexes.reserve(64);
+
+
+  int64_t curAtlasId = -1;
+  int64_t lastMortonCodeShift3 = -1;
+  int64_t cubeIndex = 0;
+  for (int32_t i = startIndex, j = 0; i < endIndex; ++i) {
+
+    const int32_t index = indexes[i];
+    const auto& pv = packedVoxel[index];
+    const int64_t mortonCode = pv.mortonCode;
+    const int64_t pointAtlasId = mortonCode >> atlasBoundaryBit;
+    const int64_t mortonCodeShiftBits3 = mortonCode >> shiftBits3;
+    const int32_t pointIndex = pv.index;
+    const auto bpoint = biasedPos[index];
+    indexes[i] = pointIndex;
+    auto& predictor = predictors[--predIndex];
+
+    if (retainedSize) {
+      while (j < retainedSize - 1
+             && mortonCode >= packedVoxel[retained[j]].mortonCode) {
+        ++j;
+      }
+
+      if (curAtlasId != pointAtlasId) {
+        atlas.clearUpdates();
+        curAtlasId = pointAtlasId;
+        while (
+          cubeIndex < retainedSize
+          && (packedVoxel[retained[cubeIndex]].mortonCode >> atlasBoundaryBit)
+            == curAtlasId) {
+          atlas.set(
+            packedVoxel[retained[cubeIndex]].mortonCode >> shiftBits3,
+            cubeIndex);
+          ++cubeIndex;
+        }
+      }
+    }
+  }
+}
+//---------------------------------------------------------------------------
+
+
+//---------------------------------------------------------------------------
+
+inline void
+computeNearestNeighborsHash(
+  const AttributeParameterSet& aps,
+  const AttributeBrickHeader& abh,
+  const std::vector<MortonCodeWithIndex>& packedVoxel,
+  const std::vector<uint32_t>& retained,
+  int32_t startIndex,
+  int32_t endIndex,
+  int32_t lodIndex,
+  std::vector<uint32_t>& indexes,
+  std::vector<PCCPredictor>& predictors,
+  std::vector<uint32_t>& pointIndexToPredictorIndex,
+  int32_t& predIndex,
+  MortonIndexMap3d& atlas
+    )
+{
+
+
+  const int32_t shiftBits = aps.scalable_lifting_enabled_flag || aps.layer_group_enabled_flag
+    ? 1 + lodIndex
+    : 1 + aps.dist2 + abh.attr_dist2_delta + lodIndex;
+  const int32_t shiftBits3 = 3 * shiftBits;
+
+  const int32_t retainedSize = retained.size();
+  const int32_t indexesSize = endIndex - startIndex;
+  
+  std::unordered_map<int64_t,int32_t> hashParent;
+  for(int i=0 ; i<retainedSize; i++){
+    const int32_t index = retained[i];
+    const auto& pv = packedVoxel[index];
+    const int64_t mortonCode = pv.mortonCode;
+    const int64_t mortonCodeShiftBits3 = mortonCode >> shiftBits3;
+
+    hashParent[mortonCodeShiftBits3] = pv.index;
+  }
+
+  for (int32_t i = startIndex; i < endIndex; ++i) {
+
+    const int32_t index = indexes[i];
+    const auto& pv = packedVoxel[index];
+    const int64_t mortonCode = pv.mortonCode;
+    const int64_t mortonCodeShiftBits3 = mortonCode >> shiftBits3;
+    const int32_t pointIndex = pv.index;
+    indexes[i] = pointIndex;
+    auto& predictor = predictors[--predIndex];
+    pointIndexToPredictorIndex[pointIndex] = predIndex;
+
+    if(retainedSize>0){
+    
+        auto it = hashParent.find(mortonCodeShiftBits3);
+    
+        assert(it != hashParent.end());
+    
+        if(it != hashParent.end()){
+            predictor.neighborCount = 1;
+            predictor.neighbors[0].predictorIndex = packedVoxel[it->second].index;
+            predictor.neighbors[0].weight = 1;  
+        }    
+    }
+  }
+
+}
 //---------------------------------------------------------------------------
 
 inline void
@@ -2315,7 +2843,13 @@ subsample(
   std::vector<uint32_t>& indexes,
   MortonIndexMap3d& atlas)
 {
-  if (aps.scalable_lifting_enabled_flag) {
+  if (aps.layer_group_enabled_flag) {
+    int32_t octreeNodeSizeLog2 = lodIndex;
+    bool direction = octreeNodeSizeLog2 & 1;
+    subsampleByOctree(
+      pointCloud, packedVoxel, input, octreeNodeSizeLog2, retained, indexes,
+      direction);
+  } else if (aps.scalable_lifting_enabled_flag) {
     int32_t octreeNodeSizeLog2 = lodIndex;
     bool direction = octreeNodeSizeLog2 & 1;
     subsampleByOctree(
@@ -2396,7 +2930,7 @@ updatePredictorsForCross(std::vector<PCCPredictor>& predictors)
 }
 //---------------------------------------------------------------------------
 
-inline void
+inline std::vector<uint32_t>
 buildPredictorsFast(
   const AttributeParameterSet& aps,
   const AttributeBrickHeader& abh,
@@ -2409,8 +2943,9 @@ buildPredictorsFast(
   ,bool interRef,
   const AttributeInterPredParams& attrInterPredParams,
   std::vector<uint32_t>& numberOfPointsPerLevelOfDetailRef,
-  std::vector<uint32_t>& indexesRef
-  )
+  std::vector<uint32_t>& indexesRef,
+  int maxLevel=0,
+  bool isGSUnit=false)
 {
   const int32_t pointCount = int32_t(pointCloud.getPointCount());
   assert(pointCount);
@@ -2497,8 +3032,11 @@ buildPredictorsFast(
     for (uint32_t i = 0; i < pointCountRef; ++i)
       indexesRef[i] = i;
   }
+  bool skipIntra = false;
 
-  auto maxNumDetailLevels = aps.maxNumDetailLevels();
+  auto maxNumDetailLevels = (aps.layer_group_enabled_flag && (maxLevel>0))?maxLevel:aps.maxNumDetailLevels();
+
+
   int32_t predIndex = int32_t(pointCount);
   for (auto lodIndex = minGeomNodeSizeLog2;
        !input.empty() && lodIndex < maxNumDetailLevels; ++lodIndex) {
@@ -2535,20 +3073,23 @@ buildPredictorsFast(
             int divided_endIndex =
               pointCount - numberOfPointsPerLevelOfDetail[lod + 1];
 
+            
+            skipIntra = isGSUnit && (retained.size()==0);
             computeNearestNeighbors(
               aps, abh, packedVoxel, retained, divided_startIndex,
               divided_endIndex, lod + minGeomNodeSizeLog2, indexes, predictors,
-              pointIndexToPredictorIndex, predIndex, atlas,interAtlas);
+              pointIndexToPredictorIndex, predIndex, atlas,interAtlas,skipIntra);
           }
         }
       }
     }
-
+    
+    skipIntra = isGSUnit && (retained.size()==0);
     computeNearestNeighbors(
       aps, abh, packedVoxel, retained, startIndex, endIndex, lodIndex, indexes,
       predictors, pointIndexToPredictorIndex, predIndex, atlas, interAtlas
       , interRef,
-      packedVoxelRef, startIndexRef, endIndexRef, indexesRef      
+      packedVoxelRef, startIndexRef, endIndexRef, indexesRef, skipIntra      
       );
 
     if (!retained.empty()) {
@@ -2565,9 +3106,2181 @@ buildPredictorsFast(
   std::reverse(
     numberOfPointsPerLevelOfDetail.begin(),
     numberOfPointsPerLevelOfDetail.end());
+
+  return pointIndexToPredictorIndex;
 }
 
 //---------------------------------------------------------------------------
+
+inline void
+buildLodFast(
+  const AttributeParameterSet& aps,
+  const AttributeBrickHeader& abh,
+  const PCCPointSet3& pointCloud,
+  int32_t minGeomNodeSizeLog2,
+  int geom_num_points_minus1,
+  std::vector<PCCPredictor>& predictors,
+  std::vector<uint32_t>& numberOfPointsPerLevelOfDetail,
+  std::vector<uint32_t>& indexes,
+  int maxLevel=0)
+{
+  const int32_t pointCount = int32_t(pointCloud.getPointCount());
+  assert(pointCount);
+
+  std::vector<MortonCodeWithIndex> packedVoxel;
+  computeMortonCodesUnsorted(pointCloud, aps.lodNeighBias, packedVoxel);
+
+  if (!aps.canonical_point_order_flag)
+    std::sort(packedVoxel.begin(), packedVoxel.end());
+
+  std::vector<uint32_t> retained, input;
+  retained.reserve(pointCount);
+  input.resize(pointCount);
+  for (uint32_t i = 0; i < pointCount; ++i) {
+    input[i] = i;
+  }
+
+  // prepare output buffers
+  predictors.resize(pointCount);
+  numberOfPointsPerLevelOfDetail.resize(0);
+  indexes.resize(0);
+  indexes.reserve(pointCount);
+  numberOfPointsPerLevelOfDetail.reserve(21);
+  numberOfPointsPerLevelOfDetail.push_back(pointCount);
+
+  bool concatenateLayers = aps.scalable_lifting_enabled_flag;
+  std::vector<uint32_t> indexesOfSubsample;
+  if (concatenateLayers)
+    indexesOfSubsample.reserve(pointCount);
+
+  std::vector<Box3<int32_t>> bBoxes;
+
+  const int32_t log2CubeSize = 7;
+  MortonIndexMap3d atlas;
+  atlas.resize(log2CubeSize);
+  atlas.init();
+
+  auto maxNumDetailLevels = (maxLevel>0)?maxLevel:aps.maxNumDetailLevels();
+  int32_t predIndex = int32_t(pointCount);
+  for (auto lodIndex = minGeomNodeSizeLog2;
+       !input.empty() && lodIndex < maxNumDetailLevels; ++lodIndex) {
+    const int32_t startIndex = indexes.size();
+    if (lodIndex == maxNumDetailLevels - 1) {
+      for (const auto index : input) {
+        indexes.push_back(index);
+      }
+    } else {
+      subsample(
+        aps, abh, pointCloud, packedVoxel, input, lodIndex, retained, indexes,
+        atlas);
+    }
+    const int32_t endIndex = indexes.size();
+
+    if (concatenateLayers) {
+      indexesOfSubsample.resize(endIndex);
+      if (startIndex != endIndex) {
+        for (int32_t i = startIndex; i < endIndex; i++)
+          indexesOfSubsample[i] = indexes[i];
+
+        int32_t numOfPointInSkipped = geom_num_points_minus1 + 1 - pointCount;
+        if (endIndex - startIndex <= startIndex + numOfPointInSkipped) {
+          concatenateLayers = false;
+        } else {
+          for (int32_t i = 0; i < startIndex; i++)
+            indexes[i] = indexesOfSubsample[i];
+
+          // reset predIndex
+          predIndex = pointCount;
+          for (int lod = 0; lod < lodIndex - minGeomNodeSizeLog2; lod++) {
+            int divided_startIndex =
+              pointCount - numberOfPointsPerLevelOfDetail[lod];
+            int divided_endIndex =
+              pointCount - numberOfPointsPerLevelOfDetail[lod + 1];
+            
+            computeJustIndex(
+              aps, abh, packedVoxel, retained, divided_startIndex,
+              divided_endIndex, lod + minGeomNodeSizeLog2, indexes, predictors,
+              predIndex, atlas);
+          }
+        }
+      }
+    }
+    
+
+    computeJustIndex(
+      aps, abh, packedVoxel, retained, startIndex, endIndex, lodIndex, indexes,
+      predictors, predIndex, atlas);
+
+    if (!retained.empty()) {
+      numberOfPointsPerLevelOfDetail.push_back(retained.size());
+    }
+    input.resize(0);
+    std::swap(retained, input);
+  }
+  std::reverse(indexes.begin(), indexes.end());
+  std::reverse(
+    numberOfPointsPerLevelOfDetail.begin(),
+    numberOfPointsPerLevelOfDetail.end());
+}
+//---------------------------------------------------------------------------
+inline void
+computeMortonCodesUnsorted(
+  const PCCPointSet3& pointCloud,
+  const int start,
+  const int end,
+  std::vector<MortonCodeWithIndex>& packedVoxel)
+{
+  int32_t pointCount = int32_t(pointCloud.getPointCount());
+  assert(start >=0);
+  assert(end <= pointCount);
+  pointCount = end - start;
+  packedVoxel.resize(pointCount);
+
+  for (int n = 0; n < pointCount; n++) {
+    auto& pv = packedVoxel[n];
+    pv.position = pointCloud[n+start];
+    pv.mortonCode = mortonAddr(pv.position);
+    pv.index = n+start;
+  }
+}
+
+inline void
+computeMortonCodesUnsortedIndexes(
+  const PCCPointSet3& pointCloud,
+  const int start,
+  const int end,
+  std::vector<uint32_t>& indexes,
+  std::vector<MortonCodeWithIndex>& packedVoxel)
+{
+  int32_t pointCount = int32_t(pointCloud.getPointCount());
+  assert(start >=0);
+  assert(end <= pointCount);
+  pointCount = end - start;
+  packedVoxel.resize(pointCount);
+
+  for (int n = 0; n < pointCount; n++) {
+    auto& pv = packedVoxel[n];
+    pv.position = pointCloud[indexes[n+start]];
+    pv.mortonCode = mortonAddr(pv.position);
+    pv.index = n+start;
+  }
+}
+
+inline void
+buildPredictorsFromParent(
+  const AttributeParameterSet& aps,
+  const PCCPointSet3& pointCloud,
+  std::vector<PCCPredictor>& predictors,
+  uint32_t numberOfPointsPerLevelOfDetail,
+  std::vector<uint32_t>& indexes,
+  const PCCPointSet3& pointCloudParent)
+{
+
+  //morton sort
+  std::vector<MortonCodeWithIndex> packedVoxel;
+  computeMortonCodesUnsortedIndexes(pointCloud,0,numberOfPointsPerLevelOfDetail,indexes,packedVoxel);
+  std::vector<MortonCodeWithIndex> packedVoxelParent;
+  computeMortonCodesUnsorted(pointCloudParent,0,numberOfPointsPerLevelOfDetail,packedVoxelParent);
+   
+  std::sort(packedVoxel.begin(), packedVoxel.end());
+  std::sort(packedVoxelParent.begin(), packedVoxelParent.end());
+
+  for (int i=0; i<numberOfPointsPerLevelOfDetail; i++) {
+    int idx1_t = packedVoxel[i].index; 
+    
+    predictors[idx1_t].neighborCount = 1;
+    predictors[idx1_t].neighbors[0].predictorIndex = packedVoxelParent[i].index;
+    predictors[idx1_t].neighbors[0].weight = 1;  
+        
+  }
+
+}
+
+inline int lodSamplingForNode(
+  const PCCPointSet3& pointCloud,
+  const int start,
+  const int end
+  ){
+          
+    std::vector<MortonCodeWithIndex> packedVoxel;
+    computeMortonCodesUnsorted(pointCloud, start, end, packedVoxel);
+    //if (!aps.canonical_point_order_flag) 
+    {
+      std::sort(packedVoxel.begin(), packedVoxel.end());
+    }
+
+
+    std::vector<uint32_t> retained, input;
+    int32_t pointCount = end - start;
+    retained.reserve(pointCount);
+    input.resize(pointCount);
+    for (uint32_t i = 0; i < pointCount; ++i) {
+      input[i] = i;
+    }
+          
+    std::vector<uint32_t> indexes;
+    indexes.resize(0);
+    indexes.reserve(pointCount);
+          
+    std::vector<uint32_t> numberOfPointsPerLevelOfDetail;
+    numberOfPointsPerLevelOfDetail.resize(0);
+    numberOfPointsPerLevelOfDetail.reserve(21);
+    numberOfPointsPerLevelOfDetail.push_back(pointCount);
+
+    int32_t maxNumDetailLevels = 21;
+    for (int32_t lodIndex = 0; !input.empty() && lodIndex < maxNumDetailLevels; ++lodIndex) {
+      if (lodIndex == maxNumDetailLevels - 1) {
+        for (const auto index : input) {
+          indexes.push_back(index);
+        }
+      } else {
+
+        int32_t octreeNodeSizeLog2 = lodIndex;
+        bool direction = octreeNodeSizeLog2 & 1;
+        subsampleByOctree(
+          pointCloud, packedVoxel, input, octreeNodeSizeLog2, retained, indexes,
+          direction);
+      }
+    
+      if (!retained.empty()) {
+        numberOfPointsPerLevelOfDetail.push_back(retained.size());
+      }
+      input.resize(0);
+      std::swap(retained, input);
+    }
+    std::reverse(indexes.begin(), indexes.end());
+    std::reverse(
+      numberOfPointsPerLevelOfDetail.begin(),
+      numberOfPointsPerLevelOfDetail.end());
+
+    //sampled index 
+    int32_t idx = packedVoxel[indexes[0]].index;
+    return idx;
+
+  }
+
+//================================================================================================
+//++++++++++++++++++++++++++++++++++++++++++++++
+
+inline void
+computeQuantizationWeights_forFullLayerGroupSlicingEncoder(
+	const std::vector<PCCPredictor>& predictors,
+	std::vector<uint64_t>& quantizationWeights,
+	Vec3<int32_t> neighWeight,
+	std::vector<uint64_t>* quantWeights_outOfSubgroup = nullptr,
+	bool flag = false,
+	bool interRef = false
+)
+{
+	const size_t pointCount = predictors.size();
+	quantizationWeights.resize(pointCount);
+	for (size_t i = 0; i < pointCount; ++i) {
+		quantizationWeights[i] = (1 << kFixedPointWeightShift);
+	}
+	for (size_t i = 0; i < pointCount; ++i) {
+		const size_t predictorIndex = pointCount - i - 1;
+		const auto& predictor = predictors[predictorIndex];
+		const auto currentQuantWeight = quantizationWeights[predictorIndex];
+		for (size_t j = 0; j < predictor.neighborCount; ++j) {
+			if (interRef && predictor.neighbors[j].interFrameRef)
+				continue;
+
+			if (predictor.neighbors[j].inTheSameSubgroupFlag) {
+				const size_t neighborPredIndex = predictor.neighbors[j].predictorIndex;
+				auto& neighborQuantWeight = quantizationWeights[neighborPredIndex];
+				neighborQuantWeight += divExp2RoundHalfInf(
+					neighWeight[j] * currentQuantWeight, kFixedPointWeightShift);
+			}
+			else if (flag && quantWeights_outOfSubgroup->size()) {
+				const size_t neighborPredIndex = predictor.neighbors[j].predictorIndex;
+				(*quantWeights_outOfSubgroup)[neighborPredIndex] += divExp2RoundHalfInf(
+					neighWeight[j] * currentQuantWeight, kFixedPointWeightShift);
+			}
+		}
+	}
+}
+
+inline
+std::vector<std::vector<std::map<int, int>>>
+SubgroupQuantizationWeightAdjustment_forFullLayerGroupSlicingEncoder(
+	std::vector<uint64_t>& quantWeights,
+	//LayerGroupSlicingParams& layerGroupParams,
+	int numLayerGroupsMinus1, 
+	std::vector<int> numSubgroupsMinus1,
+	std::vector<int> numberOfPointsPerLodPerSubgroups,
+	std::vector<int> numLayersPerLayerGroup,
+	std::vector<uint64_t> quantWeights_outOfSubgroup,
+	std::vector<int> numRefNodesInTheSameSubgroup) 
+{
+	int predCnt = 1;		// starting from lod 1
+	int arrayIdx = 1;		// starting from lod 1
+
+	std::vector<std::vector<int64_t>> quantWeights_top, quantWeights_bottom;
+	quantWeights_top.resize(numLayerGroupsMinus1 + 1);
+	quantWeights_bottom.resize(numLayerGroupsMinus1 + 1);
+
+	std::vector<std::vector<int>> numPointsInSubgroups;
+	numPointsInSubgroups.resize(numLayerGroupsMinus1 + 1);
+	std::vector<std::vector<int>> idxSelectedNodes;
+	idxSelectedNodes.resize(numLayerGroupsMinus1 + 1);
+
+	for (int i = 0; i <= numLayerGroupsMinus1; i++) {
+		int numSubgroups = numSubgroupsMinus1[i] + 1;
+		quantWeights_top[i].resize(numSubgroups);
+		quantWeights_bottom[i].resize(numSubgroups);
+		numPointsInSubgroups[i].resize(numSubgroups);
+		idxSelectedNodes[i].resize(numSubgroups);
+
+		std::vector<int> maxValue;
+		std::vector<int> maxNumRefNodes;
+		maxValue.resize(numSubgroups);
+		maxNumRefNodes.resize(numSubgroups);
+		if (i == 0) {		// lod 0
+			idxSelectedNodes[0][0] = 0;
+			maxNumRefNodes[0] = numRefNodesInTheSameSubgroup[0];
+			numPointsInSubgroups[0][0] = numberOfPointsPerLodPerSubgroups[0];
+		}
+
+		for (int j = 0; j < numLayersPerLayerGroup[i]; j++) {
+			for (int k = 0; k < numSubgroups; k++) {
+				int lyrgrpIdx = i;
+				int subgrpIdx = numSubgroups - 1 - k;
+				int numPoints = numberOfPointsPerLodPerSubgroups[arrayIdx++];
+				for (int m = 0; m < numPoints; m++) {
+					if (maxValue[subgrpIdx] < quantWeights_outOfSubgroup[predCnt])
+						maxValue[subgrpIdx] = quantWeights_outOfSubgroup[predCnt];
+
+					if (maxNumRefNodes[subgrpIdx] < numRefNodesInTheSameSubgroup[predCnt]) {
+						idxSelectedNodes[lyrgrpIdx][subgrpIdx] = predCnt;
+						maxNumRefNodes[subgrpIdx] = numRefNodesInTheSameSubgroup[predCnt];
+					}
+
+					if (j == numLayersPerLayerGroup[lyrgrpIdx] - 1)
+						quantWeights_bottom[lyrgrpIdx][subgrpIdx] += quantWeights_outOfSubgroup[predCnt];
+
+					predCnt++;
+				}
+
+				numPointsInSubgroups[lyrgrpIdx][subgrpIdx] += numPoints;
+
+				if (j == numLayersPerLayerGroup[lyrgrpIdx] - 1) {
+					quantWeights_top[lyrgrpIdx][subgrpIdx] = maxValue[subgrpIdx];
+
+					if (numPoints)
+						quantWeights_bottom[lyrgrpIdx][subgrpIdx] /= numPoints;
+					else
+						quantWeights_bottom[lyrgrpIdx][subgrpIdx] = 0;
+				}
+
+			}
+		}
+	}
+
+	std::vector<std::vector<std::map<int, int>>> coeff;
+	coeff.resize(numLayerGroupsMinus1 + 1);
+
+	predCnt = 1;
+	arrayIdx = 1;
+	for (int i = 0; i <= numLayerGroupsMinus1; i++) {
+		int numSubgroups = numSubgroupsMinus1[i] + 1;
+		coeff[i].resize(numSubgroups);
+
+		if (i == 0) {	// for lod 0
+			//quantWeights[0] += (_quantWeights_top[0][0] - _quantWeights_bottom[0][0])
+			//	* numRefNodesInTheSameSubgroup[0] / numRefNodesInTheSameSubgroup[idxSelectedNodes[0][0]]
+			//	+ _quantWeights_bottom[0][0];
+
+			coeff[0][0][0] = quantWeights_top[0][0] - quantWeights_bottom[0][0];
+			coeff[0][0][1] = quantWeights_bottom[0][0];
+		}
+
+		// update quantizationWeight
+		for (int j = 0; j < numLayersPerLayerGroup[i]; j++) {
+			for (int k = 0; k < numSubgroups; k++) {
+				int lyrgrpIdx = i;
+				int subgrpIdx = numSubgroups - 1 - k;
+				int numPoints = numberOfPointsPerLodPerSubgroups[arrayIdx++];
+
+				for (int m = 0; m < numPoints; m++) {
+					if (numRefNodesInTheSameSubgroup[idxSelectedNodes[lyrgrpIdx][subgrpIdx]]) {
+						//quantWeights[predCnt] += (_quantWeights_top[lyrgrpIdx][subgrpIdx] - _quantWeights_bottom[lyrgrpIdx][subgrpIdx])
+						//* numRefNodesInTheSameSubgroup[predCnt] / numRefNodesInTheSameSubgroup[idxSelectedNodes[lyrgrpIdx][subgrpIdx]]
+						//+ _quantWeights_bottom[lyrgrpIdx][subgrpIdx];
+
+						coeff[lyrgrpIdx][subgrpIdx][0] = quantWeights_top[lyrgrpIdx][subgrpIdx] - quantWeights_bottom[lyrgrpIdx][subgrpIdx];
+						coeff[lyrgrpIdx][subgrpIdx][1] = quantWeights_bottom[lyrgrpIdx][subgrpIdx];
+					}
+					else {
+						//quantWeights[predCnt] += _quantWeights_bottom[lyrgrpIdx][subgrpIdx];
+
+						coeff[lyrgrpIdx][subgrpIdx][0] = 0;
+						coeff[lyrgrpIdx][subgrpIdx][1] = quantWeights_bottom[lyrgrpIdx][subgrpIdx];
+					}
+
+					predCnt++;
+				}
+			}
+		}
+	}
+
+	return coeff;
+}
+
+
+inline void
+updateNearestNeighByDistanceAndDistribution(
+	const Vec3<int32_t>& point0,
+	const Vec3<int32_t>& point1,
+	int32_t index,
+	int32_t& index2,
+	int32_t(&localIndexes)[6],
+	int64_t(&minDistances)[6],
+	bool interRef,
+	std::vector<bool>& localRef,
+	bool predRef,
+	bool intraEnabledFlag,
+	std::vector<bool>& intraFlag
+)
+{
+	auto d = (point0 - point1).getNorm1();
+
+	if (d > minDistances[2]) {
+		// do nothing
+	}
+	else if (d < minDistances[0]) {
+		if (localIndexes[2] != -1) {
+			localIndexes[index2] = localIndexes[2];
+			if (interRef)
+				localRef[index2] = localRef[2];
+			if (intraEnabledFlag)
+				intraFlag[index2] = intraFlag[2];
+			++index2;
+		}
+
+		minDistances[2] = minDistances[1];
+		minDistances[1] = minDistances[0];
+		minDistances[0] = d;
+
+		localIndexes[2] = localIndexes[1];
+		localIndexes[1] = localIndexes[0];
+		localIndexes[0] = index;
+
+		if (interRef) {
+			localRef[2] = localRef[1];
+			localRef[1] = localRef[0];
+			localRef[0] = predRef;
+		}
+
+		if (intraEnabledFlag) {
+			intraFlag[2] = intraFlag[1];
+			intraFlag[1] = intraFlag[0];
+			intraFlag[0] = true;
+		}
+	}
+	else if (d < minDistances[1]) {
+		if (localIndexes[2] != -1) {
+			localIndexes[index2] = localIndexes[2];
+			if (interRef)
+				localRef[index2] = localRef[2];
+			if (intraEnabledFlag)
+				intraFlag[index2] = intraFlag[2];
+			++index2;
+		}
+
+		minDistances[2] = minDistances[1];
+		minDistances[1] = d;
+		localIndexes[2] = localIndexes[1];
+		localIndexes[1] = index;
+
+		if (interRef) {
+			localRef[2] = localRef[1];
+			localRef[1] = predRef;
+		}
+
+		if (intraEnabledFlag) {
+			intraFlag[2] = intraFlag[1];
+			intraFlag[1] = true;
+		}
+	}
+	else if (d < minDistances[2]) {
+		if (localIndexes[2] != -1) {
+			localIndexes[index2] = localIndexes[2];
+			if (interRef)
+				localRef[index2] = localRef[2];
+			if (intraEnabledFlag)
+				intraFlag[index2] = intraFlag[2];
+			++index2;
+		}
+
+		minDistances[2] = d;
+		localIndexes[2] = index;
+
+		if (interRef) {
+			localRef[2] = predRef;
+		}
+
+		if (intraEnabledFlag) {
+			intraFlag[2] = true;
+		}
+	}
+	else if (localIndexes[5] == -1) {
+		localIndexes[index2] = index;
+		if (interRef)
+			localRef[index2] = predRef;
+		if (intraEnabledFlag)
+			intraFlag[index2] = true;
+
+		++index2;
+	}
+
+	if (index2 == 6)
+		index2 = 3;
+}
+
+inline void
+updateNearestNeigh(
+	const Vec3<int32_t>& point0,
+	const Vec3<int32_t>& point1,
+	int32_t index,
+	int32_t(&localIndexes)[6],
+	int64_t(&minDistances)[6],
+	bool interRef,
+	std::vector<bool>& localRef,
+	bool predRef,
+	bool intraEnabledFlag,
+	std::vector<bool>& intraFlag)
+{
+	auto d = (point0 - point1).getNorm1();
+
+	if (d >= minDistances[2]) {
+		// do nothing
+	}
+	else if (d < minDistances[0]) {
+		minDistances[2] = minDistances[1];
+		minDistances[1] = minDistances[0];
+		minDistances[0] = d;
+
+		localIndexes[2] = localIndexes[1];
+		localIndexes[1] = localIndexes[0];
+		localIndexes[0] = index;
+
+		if (interRef) {
+			localRef[2] = localRef[1];
+			localRef[1] = localRef[0];
+			localRef[0] = predRef;
+		}
+
+		if (intraEnabledFlag) {
+			intraFlag[2] = intraFlag[1];
+			intraFlag[1] = intraFlag[0];
+			intraFlag[0] = true;
+		}
+	}
+	else if (d < minDistances[1]) {
+		minDistances[2] = minDistances[1];
+		minDistances[1] = d;
+		localIndexes[2] = localIndexes[1];
+		localIndexes[1] = index;
+
+		if (interRef) {
+			localRef[2] = localRef[1];
+			localRef[1] = predRef;
+		}
+
+		if (intraEnabledFlag) {
+			intraFlag[2] = intraFlag[1];
+			intraFlag[1] = true;
+		}
+	}
+	else {
+		minDistances[2] = d;
+		localIndexes[2] = index;
+
+		if (interRef) {
+			localRef[2] = predRef;
+		}
+
+		if (intraEnabledFlag) {
+			intraFlag[2] = true;
+		}
+	}
+}
+
+//---------------------------------------------------------------------------
+
+inline void
+updateNearestNeighByDistanceAndDistributionWithCheck(
+	const Vec3<int32_t>& point0,
+	const Vec3<int32_t>& point1,
+	const int32_t index,
+	int32_t& index2,
+	int32_t(&localIndexes)[6],
+	int64_t(&minDistances)[6],
+	bool interRef,
+	std::vector<bool>& localRef,
+	bool predRef,
+	bool intraEnabledFlag,
+	std::vector<bool>& intraFlag
+
+)
+{
+	if (interRef) {
+		if (
+			(index == localIndexes[0] && predRef == localRef[0])
+			|| (index == localIndexes[1] && predRef == localRef[1])
+			|| (index == localIndexes[2] && predRef == localRef[2])
+			|| (index == localIndexes[3] && predRef == localRef[3])
+			|| (index == localIndexes[4] && predRef == localRef[4])
+			|| (index == localIndexes[5] && predRef == localRef[5]))
+			return;
+	}
+	else
+		if ((index == localIndexes[0] && intraEnabledFlag == intraFlag[0])
+			|| (index == localIndexes[1] && intraEnabledFlag == intraFlag[1])
+			|| (index == localIndexes[2] && intraEnabledFlag == intraFlag[2])
+			|| (index == localIndexes[3] && intraEnabledFlag == intraFlag[3])
+			|| (index == localIndexes[4] && intraEnabledFlag == intraFlag[4])
+			|| (index == localIndexes[5] && intraEnabledFlag == intraFlag[5])
+			)
+			return;
+
+	updateNearestNeighByDistanceAndDistribution(
+		point0, point1, index, index2, localIndexes, minDistances
+		, interRef, localRef, predRef, intraEnabledFlag, intraFlag
+	);
+}
+
+
+inline void
+updateNearestNeighWithCheck(
+	const Vec3<int32_t>& point0,
+	const Vec3<int32_t>& point1,
+	const int32_t index,
+	int32_t(&localIndexes)[6],
+	int64_t(&minDistances)[6],
+	bool interRef,
+	std::vector<bool>& localRef,
+	bool predRef,
+	bool intraEnabledFlag,
+	std::vector<bool>& intraFlag
+)
+{
+	if (interRef) {
+		if (
+			(index == localIndexes[0] && predRef == localRef[0])
+			|| (index == localIndexes[1] && predRef == localRef[1])
+			|| (index == localIndexes[2] && predRef == localRef[2]))
+			return;
+	}
+	else if (
+		(index == localIndexes[0] && intraEnabledFlag == intraFlag[0])
+		|| (index == localIndexes[1] && intraEnabledFlag == intraFlag[1])
+		|| (index == localIndexes[2] && intraEnabledFlag == intraFlag[2])
+		)
+		return;
+
+	updateNearestNeigh(
+		point0, point1, index, localIndexes, minDistances, interRef, localRef,
+		predRef, intraEnabledFlag, intraFlag);
+}
+
+//---------------------------------------------------------------------------
+
+
+
+inline void
+computeNearestNeighbors(
+	const AttributeParameterSet& aps,
+	const AttributeBrickHeader& abh,
+	const std::vector<MortonCodeWithIndex>& packedVoxel,
+	const std::vector<uint32_t>& retained,
+	int32_t startIndex,
+	int32_t endIndex,
+	int32_t lodIndex,
+	std::vector<uint32_t>& indexes,
+	std::vector<PCCPredictor>& predictors,
+	std::vector<uint32_t>& pointIndexToPredictorIndex,
+	int32_t& predIndex,
+	MortonIndexMap3d& atlas,
+	MortonIndexMap3d& interAtlas,
+	bool interRef,
+	const std::vector<MortonCodeWithIndex>& packedVoxelRef,
+	int32_t startIndexRef,
+	int32_t endIndexRef,
+	std::vector<uint32_t>& indexesRef,
+	bool layerGroupEnabledFlag,
+	const int curLayerGroup,
+	const int curSubgroup,
+	std::vector<point_t> biasedPos_indexes,
+	std::vector<point_t> biasedPos_retained)
+{
+	constexpr auto searchRangeNear = 2;
+	constexpr auto bucketSizeLog2 = 5;
+	constexpr auto bucketSize = 1 << bucketSizeLog2;
+	constexpr auto bucketSizeMinus1 = bucketSize - 1;
+	constexpr auto levelCount = 3;
+
+	const int32_t shiftBits = (aps.scalable_lifting_enabled_flag || layerGroupEnabledFlag)
+		? 1 + lodIndex
+		: 1 + aps.dist2 + abh.attr_dist2_delta + lodIndex;
+	const int32_t shiftBits3 = 3 * shiftBits;
+	const int32_t log2CubeSize = atlas.cubeSizeLog2();
+	const int32_t atlasBits = 3 * log2CubeSize;
+	const int32_t interLog2CubeSize = interAtlas.cubeSizeLog2();
+	const int32_t interAtlasBits = 3 * interLog2CubeSize;
+	// NB: when the atlas boundary is greater than 2^63, all points belong
+	//     to a single atlas.  The clipping is necessary to avoid undefined
+	//     behaviour of shifts greater than or equal to the word size.
+	const int32_t atlasBoundaryBit = std::min(63, shiftBits3 + atlasBits);
+	const int32_t interAtlasBoundaryBit =
+		std::min(63, shiftBits3 + interAtlasBits);
+
+	const int32_t retainedSize = retained.size();
+	const int32_t indexesSize = endIndex - startIndex;
+
+	auto rangeInterLod = aps.inter_lod_search_range;
+	auto rangeIntraLod = aps.intra_lod_search_range;
+
+	//const auto rangeInterLod = aps.inter_lod_search_range;
+	//const auto rangeIntraLod = aps.intra_lod_search_range;
+
+	static const uint8_t kNeighOffset[27] = {
+	  7,   // { 0,  0,  0} 0
+	  3,   // {-1,  0,  0} 1
+	  5,   // { 0, -1,  0} 2
+	  6,   // { 0,  0, -1} 3
+	  35,  // { 1,  0,  0} 4
+	  21,  // { 0,  1,  0} 5
+	  14,  // { 0,  0,  1} 6
+	  28,  // { 0,  1,  1} 7
+	  42,  // { 1,  0,  1} 8
+	  49,  // { 1,  1,  0} 9
+	  12,  // { 0, -1,  1} 10
+	  10,  // {-1,  0,  1} 11
+	  17,  // {-1,  1,  0} 12
+	  20,  // { 0,  1, -1} 13
+	  34,  // { 1,  0, -1} 14
+	  33,  // { 1, -1,  0} 15
+	  4,   // { 0, -1, -1} 16
+	  2,   // {-1,  0, -1} 17
+	  1,   // {-1, -1,  0} 18
+	  56,  // { 1,  1,  1} 19
+	  24,  // {-1,  1,  1} 20
+	  40,  // { 1, -1,  1} 21
+	  48,  // { 1,  1, -1} 22
+	  32,  // { 1, -1, -1} 23
+	  16,  // {-1,  1, -1} 24
+	  8,   // {-1, -1,  1} 25
+	  0    // {-1, -1, -1} 26
+	};
+
+	//// The point positions biased by lodNieghBias
+	//// todo(df): preserve this
+	//std::vector<point_t> biasedPos;
+	//biasedPos.reserve(packedVoxel.size());
+	//for (const auto& src : packedVoxel) {
+	//  auto point = clacIntermediatePosition(
+	//    aps.scalable_lifting_enabled_flag, lodIndex, src.position);
+	//  biasedPos.push_back(times(point, aps.lodNeighBias));
+	//}
+
+	atlas.reserve(retainedSize);
+	std::vector<int32_t> neighborIndexes;
+	neighborIndexes.reserve(64);
+	std::vector<int32_t> neighborInterIndexes;
+	neighborInterIndexes.reserve(64);
+
+	BoxHierarchy<bucketSizeLog2, levelCount> hBBoxes;
+	hBBoxes.resize(retainedSize);
+	for (int32_t i = 0, b = 0; i < retainedSize; ++b) {
+		hBBoxes.insert(biasedPos_retained[i], i);
+		++i;
+		for (int32_t k = 1; k < bucketSize && i < retainedSize; ++k, ++i) {
+			hBBoxes.insert(biasedPos_retained[i], i);
+		}
+	}
+	hBBoxes.update();
+
+	BoxHierarchy<bucketSizeLog2, levelCount> hIntraBBoxes;
+	if (lodIndex >= aps.intra_lod_prediction_skip_layers) {
+		hIntraBBoxes.resize(indexesSize);
+		for (int32_t i = startIndex, b = 0; i < endIndex; ++b) {
+			hIntraBBoxes.insert(biasedPos_indexes[i], i - startIndex);
+			++i;
+			for (int32_t k = 1; k < bucketSize && i < endIndex; ++k, ++i) {
+				hIntraBBoxes.insert(biasedPos_indexes[i], i - startIndex);
+			}
+		}
+		hIntraBBoxes.update();
+	}
+
+	const int32_t indexesSizeRef = endIndexRef - startIndexRef;
+	const auto interSearchRange = abh.attrInterPredSearchRange;
+	std::vector<point_t> biasedPosRef;
+	BoxHierarchy<bucketSizeLog2, levelCount> hIntraBBoxesRef;
+	if (interRef) {
+		rangeInterLod = rangeIntraLod = interSearchRange;
+		// The point positions biased by lodNeighBias
+		biasedPosRef.reserve(packedVoxelRef.size());
+		for (const auto& src_ref : packedVoxelRef) {
+			auto point = clacIntermediatePosition(
+				aps.scalable_lifting_enabled_flag, lodIndex, src_ref.position);
+			biasedPosRef.push_back(times(point, aps.lodNeighBias));
+		}
+
+		hIntraBBoxesRef.resize(indexesSizeRef);
+		for (int32_t i = startIndexRef; i < endIndexRef;) {
+			hIntraBBoxesRef.insert(biasedPosRef[indexesRef[i]], i - startIndexRef);
+			++i;
+			for (int32_t k = 1; k < bucketSize && i < endIndexRef; ++k, ++i) {
+				hIntraBBoxesRef.insert(biasedPosRef[indexesRef[i]], i - startIndexRef);
+			}
+		}
+		hIntraBBoxesRef.update();
+	}
+	int jRef = 0;
+
+	const auto bucketSize0Log2 = hBBoxes.bucketSizeLog2(0);
+	const auto bucketSize1Log2 = hBBoxes.bucketSizeLog2(1);
+	const auto bucketSize2Log2 = hBBoxes.bucketSizeLog2(2);
+
+	int64_t curAtlasId = -1;
+	int64_t lastMortonCodeShift3 = -1;
+	int64_t cubeIndex = 0;
+	int32_t distCoefficient = 54;
+
+	int64_t curInterAtlasId = -1;
+	int64_t lastInterMortonCodeShift3 = -1;
+	int64_t cubeInterIndex = 0;
+
+	for (int32_t i = startIndex, j = 0; i < endIndex; ++i) {
+		int32_t localIndexes[6] = { -1, -1, -1, -1, -1, -1 };
+		int64_t minDistances[6] = { std::numeric_limits<int64_t>::max(),
+								   std::numeric_limits<int64_t>::max(),
+								   std::numeric_limits<int64_t>::max(),
+								   std::numeric_limits<int64_t>::max(),
+								   std::numeric_limits<int64_t>::max(),
+								   std::numeric_limits<int64_t>::max() };
+
+		std::vector<bool> localRef = { false, false, false, false, false, false };
+		std::vector<bool> intraFlag = { false, false, false, false, false, false };
+
+		const int32_t index = indexes[i];
+		const auto& pv = packedVoxel[index];
+		const int64_t mortonCode = pv.mortonCode;
+		const int64_t pointAtlasId = mortonCode >> atlasBoundaryBit;
+		const int64_t mortonCodeShiftBits3 = mortonCode >> shiftBits3;
+		const int64_t interPointAtlasId = mortonCode >> interAtlasBoundaryBit;
+		const int32_t pointIndex = pv.index;
+		const auto bpoint = biasedPos_indexes[i];
+		indexes[i] = pointIndex;
+		auto& predictor = predictors[--predIndex];
+		pointIndexToPredictorIndex[pointIndex] = predIndex;
+
+		predictor.curLayerGroup = curLayerGroup;
+		predictor.curSubgroup = curSubgroup;
+
+		int32_t index2 = 3;
+		if (retainedSize) {
+			while (j < retainedSize - 1
+				&& mortonCode >= packedVoxel[retained[j]].mortonCode) {
+				++j;
+			}
+
+			if (curAtlasId != pointAtlasId) {
+				atlas.clearUpdates();
+				curAtlasId = pointAtlasId;
+
+				while (cubeIndex < retainedSize
+					&& (packedVoxel[retained[cubeIndex]].mortonCode >> atlasBoundaryBit)
+					< curAtlasId)
+					++cubeIndex;
+
+				while (
+					cubeIndex < retainedSize
+					&& (packedVoxel[retained[cubeIndex]].mortonCode >> atlasBoundaryBit)
+					== curAtlasId) {
+					atlas.set(
+						packedVoxel[retained[cubeIndex]].mortonCode >> shiftBits3,
+						cubeIndex);
+					++cubeIndex;
+				}
+			}
+
+			if (lastMortonCodeShift3 != mortonCodeShiftBits3) {
+				lastMortonCodeShift3 = mortonCodeShiftBits3;
+				const auto basePosition = morton3dAdd(mortonCodeShiftBits3, -1ll);
+				neighborIndexes.resize(0);
+				for (int32_t n = 0; n < 27; ++n) {
+					const auto neighbMortonCode =
+						morton3dAdd(basePosition, kNeighOffset[n]);
+					if ((neighbMortonCode >> atlasBits) != curAtlasId) {
+						continue;
+					}
+					const auto range = atlas.get(neighbMortonCode);
+					for (int32_t k = range.start; k < range.end; ++k) {
+						neighborIndexes.push_back(k);
+					}
+				}
+			}
+
+			for (const auto k : neighborIndexes) {
+				if (aps.predictionWithDistributionEnabled) {
+					updateNearestNeighByDistanceAndDistribution(
+						bpoint, biasedPos_retained[k], k, index2, localIndexes,
+						minDistances, false, localRef, false, false, intraFlag);
+				}
+				else {
+					updateNearestNeigh(
+						bpoint, biasedPos_retained[k], k, localIndexes, minDistances,
+						false, localRef, false, false, intraFlag);
+				}
+			}
+
+			if (localIndexes[2] == -1) {
+				const auto center = localIndexes[0] == -1 ? j : localIndexes[0];
+				const auto k0 = std::max(0, center - rangeInterLod);
+				const auto k1 = std::min(retainedSize - 1, center + rangeInterLod);
+				if (aps.predictionWithDistributionEnabled) {
+					updateNearestNeighByDistanceAndDistributionWithCheck(
+						bpoint, biasedPos_retained[center], center, index2, localIndexes,
+						minDistances, false, localRef, false, false, intraFlag);
+				}
+				else {
+					updateNearestNeighWithCheck(
+						bpoint, biasedPos_retained[center], center, localIndexes,
+						minDistances, false, localRef, false, false, intraFlag);
+				}
+
+				for (int32_t n = 1; n <= searchRangeNear; ++n) {
+					const int32_t kp = center + n;
+					if (kp <= k1) {
+						if (aps.predictionWithDistributionEnabled) {
+							updateNearestNeighByDistanceAndDistributionWithCheck(
+								bpoint, biasedPos_retained[kp], kp, index2, localIndexes,
+								minDistances, false, localRef, false, false, intraFlag);
+						}
+						else {
+							updateNearestNeighWithCheck(
+								bpoint, biasedPos_retained[kp], kp, localIndexes,
+								minDistances, false, localRef, false, false, intraFlag);
+						}
+					}
+					const int32_t kn = center - n;
+					if (kn >= k0) {
+						if (aps.predictionWithDistributionEnabled) {
+							updateNearestNeighByDistanceAndDistributionWithCheck(
+								bpoint, biasedPos_retained[kn], kn, index2, localIndexes,
+								minDistances, false, localRef, false, false, intraFlag);
+						}
+						else {
+							updateNearestNeighWithCheck(
+								bpoint, biasedPos_retained[kn], kn, localIndexes,
+								minDistances, false, localRef, false, false, intraFlag);
+						}
+					}
+				}
+
+				const int32_t p1 =
+					std::min(retainedSize - 1, center + searchRangeNear + 1);
+				const int32_t p0 = std::max(0, center - searchRangeNear - 1);
+
+				// search p1...k1
+				const int32_t b21 = k1 >> bucketSize2Log2;
+				const int32_t b20 = p1 >> bucketSize2Log2;
+				const int32_t b11 = k1 >> bucketSize1Log2;
+				const int32_t b10 = p1 >> bucketSize1Log2;
+				const int32_t b01 = k1 >> bucketSize0Log2;
+				const int32_t b00 = p1 >> bucketSize0Log2;
+				for (int32_t b2 = b20; b2 <= b21; ++b2) {
+					if (
+						localIndexes[2] != -1
+						&& hBBoxes.bBox(b2, 2).getDist1(bpoint) >= minDistances[2])
+						continue;
+
+					const auto alignedIndex1 = b2 << bucketSizeLog2;
+					const auto start1 = std::max(b10, alignedIndex1);
+					const auto end1 = std::min(b11, alignedIndex1 + bucketSizeMinus1);
+					for (int32_t b1 = start1; b1 <= end1; ++b1) {
+						if (
+							localIndexes[2] != -1
+							&& hBBoxes.bBox(b1, 1).getDist1(bpoint) >= minDistances[2])
+							continue;
+
+						const auto alignedIndex0 = b1 << bucketSizeLog2;
+						const auto start0 = std::max(b00, alignedIndex0);
+						const auto end0 = std::min(b01, alignedIndex0 + bucketSizeMinus1);
+						for (int32_t b0 = start0; b0 <= end0; ++b0) {
+							if (
+								localIndexes[2] != -1
+								&& hBBoxes.bBox(b0, 0).getDist1(bpoint) >= minDistances[2])
+								continue;
+
+							const int32_t alignedIndex = b0 << bucketSizeLog2;
+							const int32_t h0 = std::max(p1, alignedIndex);
+							const int32_t h1 = std::min(k1, alignedIndex + bucketSizeMinus1);
+							for (int32_t k = h0; k <= h1; ++k) {
+								if (aps.predictionWithDistributionEnabled) {
+									updateNearestNeighByDistanceAndDistributionWithCheck(
+										bpoint, biasedPos_retained[k], k, index2, localIndexes,
+										minDistances, false, localRef, false, false, intraFlag);
+								}
+								else {
+									updateNearestNeighWithCheck(
+										bpoint, biasedPos_retained[k], k, localIndexes,
+										minDistances, false, localRef, false, false, intraFlag);
+								}
+							}
+						}
+					}
+				}
+
+				// search k0...p1
+				const int32_t c21 = p0 >> bucketSize2Log2;
+				const int32_t c20 = k0 >> bucketSize2Log2;
+				const int32_t c11 = p0 >> bucketSize1Log2;
+				const int32_t c10 = k0 >> bucketSize1Log2;
+				const int32_t c01 = p0 >> bucketSize0Log2;
+				const int32_t c00 = k0 >> bucketSize0Log2;
+				for (int32_t c2 = c21; c2 >= c20; --c2) {
+					if (
+						localIndexes[2] != -1
+						&& hBBoxes.bBox(c2, 2).getDist1(bpoint) >= minDistances[2])
+						continue;
+
+					const auto alignedIndex1 = c2 << bucketSizeLog2;
+					const auto start1 = std::max(c10, alignedIndex1);
+					const auto end1 = std::min(c11, alignedIndex1 + bucketSizeMinus1);
+					for (int32_t c1 = end1; c1 >= start1; --c1) {
+						if (
+							localIndexes[2] != -1
+							&& hBBoxes.bBox(c1, 1).getDist1(bpoint) >= minDistances[2])
+							continue;
+
+						const auto alignedIndex0 = c1 << bucketSizeLog2;
+						const auto start0 = std::max(c00, alignedIndex0);
+						const auto end0 = std::min(c01, alignedIndex0 + bucketSizeMinus1);
+						for (int32_t c0 = end0; c0 >= start0; --c0) {
+							if (
+								localIndexes[2] != -1
+								&& hBBoxes.bBox(c0, 0).getDist1(bpoint) >= minDistances[2])
+								continue;
+
+							const int32_t alignedIndex = c0 << bucketSizeLog2;
+							const int32_t h0 = std::max(k0, alignedIndex);
+							const int32_t h1 = std::min(p0, alignedIndex + bucketSizeMinus1);
+							for (int32_t k = h1; k >= h0; --k) {
+								if (aps.predictionWithDistributionEnabled) {
+									updateNearestNeighByDistanceAndDistributionWithCheck(
+										bpoint, biasedPos_retained[k], k, index2, localIndexes,
+										minDistances, false, localRef, false, false, intraFlag);
+								}
+								else {
+									updateNearestNeighWithCheck(
+										bpoint, biasedPos_retained[k], k, localIndexes,
+										minDistances, false, localRef, false, false, intraFlag);
+								}
+							}
+						}
+					}
+				}
+			}
+
+			predictor.neighborCount = (localIndexes[0] != -1)
+				+ (localIndexes[1] != -1) + (localIndexes[2] != -1);
+
+			//for (int32_t h = 0; h < predictor.neighborCount; ++h)
+			//  localIndexes[h] = retained[localIndexes[h]];
+			//if (aps.predictionWithDistributionEnabled) {
+			//  int neighborCount2 = (localIndexes[3] != -1) + (localIndexes[4] != -1)
+			//    + (localIndexes[5] != -1);
+			//  for (int32_t h = 3; h < 3 + neighborCount2; ++h)
+			//    localIndexes[h] = retained[localIndexes[h]];
+			//}
+		}
+
+		if (lodIndex >= aps.intra_lod_prediction_skip_layers) {
+			const int32_t k00 = i + 1;
+			const int32_t k01 = std::min(endIndex - 1, k00 + searchRangeNear);
+			for (int32_t k = k00; k <= k01; ++k) {
+				if (aps.predictionWithDistributionEnabled) {
+					updateNearestNeighByDistanceAndDistribution(
+						bpoint, biasedPos_indexes[k], k, index2, localIndexes,
+						minDistances, false, localRef, false, true, intraFlag);
+				}
+				else {
+					updateNearestNeigh(
+						bpoint, biasedPos_indexes[k], k, localIndexes,
+						minDistances, false, localRef, false, true, intraFlag);
+				}
+			}
+			const int32_t k0 = k01 + 1 - startIndex;
+			const int32_t k1 =
+				std::min(endIndex - 1, k00 + rangeIntraLod) - startIndex;
+
+			// search k0...k1
+			const int32_t b21 = k1 >> bucketSize2Log2;
+			const int32_t b20 = k0 >> bucketSize2Log2;
+			const int32_t b11 = k1 >> bucketSize1Log2;
+			const int32_t b10 = k0 >> bucketSize1Log2;
+			const int32_t b01 = k1 >> bucketSize0Log2;
+			const int32_t b00 = k0 >> bucketSize0Log2;
+			for (int32_t b2 = b20; b2 <= b21; ++b2) {
+				if (
+					localIndexes[2] != -1
+					&& hIntraBBoxes.bBox(b2, 2).getDist1(bpoint) >= minDistances[2])
+					continue;
+
+				const auto alignedIndex1 = b2 << bucketSizeLog2;
+				const auto start1 = std::max(b10, alignedIndex1);
+				const auto end1 = std::min(b11, alignedIndex1 + bucketSizeMinus1);
+				for (int32_t b1 = start1; b1 <= end1; ++b1) {
+					if (
+						localIndexes[2] != -1
+						&& hIntraBBoxes.bBox(b1, 1).getDist1(bpoint) >= minDistances[2])
+						continue;
+
+					const auto alignedIndex0 = b1 << bucketSizeLog2;
+					const auto start0 = std::max(b00, alignedIndex0);
+					const auto end0 = std::min(b01, alignedIndex0 + bucketSizeMinus1);
+					for (int32_t b0 = start0; b0 <= end0; ++b0) {
+						if (
+							localIndexes[2] != -1
+							&& hIntraBBoxes.bBox(b0, 0).getDist1(bpoint) >= minDistances[2])
+							continue;
+
+						const int32_t alignedIndex = b0 << bucketSizeLog2;
+						const int32_t h0 = std::max(k0, alignedIndex);
+						const int32_t h1 = std::min(k1, alignedIndex + bucketSizeMinus1);
+						for (int32_t h = h0; h <= h1; ++h) {
+							const int32_t k = startIndex + h;
+							if (aps.predictionWithDistributionEnabled) {
+								updateNearestNeighByDistanceAndDistribution(
+									bpoint, biasedPos_indexes[k], k, index2,
+									localIndexes, minDistances, false, localRef, false, true, intraFlag);
+							}
+							else {
+								updateNearestNeigh(
+									bpoint, biasedPos_indexes[k], k, localIndexes,
+									minDistances, false, localRef, false, true, intraFlag);
+							}
+						}
+					}
+				}
+			}
+		}
+
+		/// using the atlas to search the inter-prediction
+		if (interRef) {
+			if (curInterAtlasId != interPointAtlasId) {
+				curInterAtlasId = interPointAtlasId;
+				interAtlas.clearUpdates();
+				while (cubeInterIndex < endIndexRef
+					&& (packedVoxelRef[indexesRef[cubeInterIndex]].mortonCode
+						>> interAtlasBoundaryBit)
+					== curInterAtlasId) {
+					interAtlas.set(
+						packedVoxelRef[indexesRef[cubeInterIndex]].mortonCode
+						>> shiftBits3,
+						indexesRef[cubeInterIndex]);
+					++cubeInterIndex;
+				}
+			}
+			if (lastInterMortonCodeShift3 != mortonCodeShiftBits3) {
+				lastInterMortonCodeShift3 = mortonCodeShiftBits3;
+				const auto basePosition = morton3dAdd(mortonCodeShiftBits3, -1ll);
+				neighborInterIndexes.resize(0);
+				for (int32_t n = 0; n < 27; ++n) {
+					const auto neighbMortonCode =
+						morton3dAdd(basePosition, kNeighOffset[n]);
+					if ((neighbMortonCode >> atlasBits) != curInterAtlasId) {
+						continue;
+					}
+					const auto range = interAtlas.get(neighbMortonCode);
+					for (int32_t k = range.start; k < range.end; ++k) {
+						neighborInterIndexes.push_back(k);
+					}
+				}
+			}
+			for (const auto k : neighborInterIndexes) {
+				if (aps.predictionWithDistributionEnabled) {
+					updateNearestNeighByDistanceAndDistribution(
+						bpoint, biasedPosRef[indexesRef[k]], k, index2, localIndexes,
+						minDistances, true, localRef, true, false, intraFlag);
+				}
+				else {
+					updateNearestNeigh(
+						bpoint, biasedPosRef[indexesRef[k]], k, localIndexes, minDistances,
+						true, localRef, true, false, intraFlag);
+				}
+			}
+		}
+
+		if (interRef) {
+			if (endIndexRef > startIndexRef) {
+				while ((jRef < (indexesSizeRef - 1))
+					&& mortonCode > packedVoxelRef[indexesRef[jRef]].mortonCode) {
+					++jRef;
+				}
+				const int32_t k0_ref =
+					std::min(endIndexRef - 1, std::max(startIndexRef, jRef))
+					- startIndexRef;
+				const int32_t k1_ref =
+					std::min(
+						endIndexRef - 1,
+						std::max(startIndexRef, k0_ref + interSearchRange))
+					- startIndexRef;
+
+				//search k0_ref ... k1_ref
+				const int32_t b21_ref = k1_ref >> bucketSize2Log2;
+				const int32_t b20_ref = k0_ref >> bucketSize2Log2;
+				const int32_t b11_ref = k1_ref >> bucketSize1Log2;
+				const int32_t b10_ref = k0_ref >> bucketSize1Log2;
+				const int32_t b01_ref = k1_ref >> bucketSize0Log2;
+				const int32_t b00_ref = k0_ref >> bucketSize0Log2;
+				for (int32_t b2 = b20_ref; b2 <= b21_ref; ++b2) {
+					if (
+						localIndexes[2] != -1
+						&& hIntraBBoxesRef.bBox(b2, 2).getDist1(bpoint)
+						>= minDistances[2]) {
+						continue;
+					}
+
+					const auto alignedIndex1_ref = b2 << bucketSizeLog2;
+					const auto start1_ref = std::max(b10_ref, alignedIndex1_ref);
+					const auto end1_ref =
+						std::min(b11_ref, alignedIndex1_ref + bucketSizeMinus1);
+					for (int32_t b1 = start1_ref; b1 <= end1_ref; ++b1) {
+						if (
+							localIndexes[2] != -1
+							&& hIntraBBoxesRef.bBox(b1, 1).getDist1(bpoint)
+							>= minDistances[2]) {
+							continue;
+						}
+						const auto alignedIndex0_ref = b1 << bucketSizeLog2;
+						const auto start0_ref = std::max(b00_ref, alignedIndex0_ref);
+						const auto end0_ref =
+							std::min(b01_ref, alignedIndex0_ref + bucketSizeMinus1);
+						for (int32_t b0 = start0_ref; b0 <= end0_ref; ++b0) {
+							if (
+								localIndexes[2] != -1
+								&& hIntraBBoxesRef.bBox(b0, 0).getDist1(bpoint)
+								>= minDistances[2]) {
+								continue;
+							}
+							const int32_t alignedIndex_ref = b0 << bucketSizeLog2;
+							const int32_t h0_ref = std::max(k0_ref, alignedIndex_ref);
+							const int32_t h1_ref =
+								std::min(k1_ref, alignedIndex_ref + bucketSizeMinus1);
+							for (int32_t h = h0_ref; h <= h1_ref; ++h) {
+								const int32_t k_ref = startIndexRef + h;
+								if (aps.predictionWithDistributionEnabled) {
+									updateNearestNeighByDistanceAndDistribution(
+										bpoint, biasedPosRef[indexesRef[k_ref]], indexesRef[k_ref],
+										index2, localIndexes, minDistances, true, localRef, true, false, intraFlag);
+								}
+								else {
+									updateNearestNeigh(
+										bpoint, biasedPosRef[indexesRef[k_ref]], indexesRef[k_ref],
+										localIndexes, minDistances, true, localRef, true, false, intraFlag);
+								}
+							}
+						}
+					}
+				}
+
+				//Search k1_ref_left ... k0_ref_lefti
+				const int32_t k0_ref_left =
+					std::min(endIndexRef - 1, std::max(startIndexRef, jRef - 1))
+					- startIndexRef;
+				const int32_t k1_ref_left =
+					std::min(
+						endIndexRef - 1,
+						std::max(startIndexRef, k0_ref_left - interSearchRange))
+					- startIndexRef;
+
+				const int32_t b21_ref_left = k1_ref_left >> bucketSize2Log2;
+				const int32_t b20_ref_left = k0_ref_left >> bucketSize2Log2;
+				const int32_t b11_ref_left = k1_ref_left >> bucketSize1Log2;
+				const int32_t b10_ref_left = k0_ref_left >> bucketSize1Log2;
+				const int32_t b01_ref_left = k1_ref_left >> bucketSize0Log2;
+				const int32_t b00_ref_left = k0_ref_left >> bucketSize0Log2;
+
+				for (int32_t b2 = b21_ref_left; b2 <= b20_ref_left; ++b2) {
+					if (
+						localIndexes[2] != -1
+						&& hIntraBBoxesRef.bBox(b2, 2).getDist1(bpoint)
+						>= minDistances[2]) {
+						continue;
+					}
+
+					const auto alignedIndex1_ref_left = b2 << bucketSizeLog2;
+					const auto start1_ref_left =
+						std::max(b11_ref_left, alignedIndex1_ref_left);
+					const auto end1_ref_left =
+						std::min(b10_ref_left, alignedIndex1_ref_left + bucketSizeMinus1);
+					for (int32_t b1 = start1_ref_left; b1 <= end1_ref_left; ++b1) {
+						if (
+							localIndexes[2] != -1
+							&& hIntraBBoxesRef.bBox(b1, 1).getDist1(bpoint)
+							>= minDistances[2]) {
+							continue;
+						}
+						const auto alignedIndex0_ref_left = b1 << bucketSizeLog2;
+						const auto start0_ref_left =
+							std::max(b01_ref_left, alignedIndex0_ref_left);
+						const auto end0_ref_left = std::min(
+							b00_ref_left, alignedIndex0_ref_left + bucketSizeMinus1);
+						for (int32_t b0 = start0_ref_left; b0 <= end0_ref_left; ++b0) {
+							if (
+								localIndexes[2] != -1
+								&& hIntraBBoxesRef.bBox(b0, 0).getDist1(bpoint)
+								>= minDistances[2]) {
+								continue;
+							}
+							const int32_t alignedIndex_ref_left = b0 << bucketSizeLog2;
+							const int32_t h0_ref_left =
+								std::max(k1_ref_left, alignedIndex_ref_left);
+							const int32_t h1_ref_left = std::min(
+								k0_ref_left, alignedIndex_ref_left + bucketSizeMinus1);
+							for (int32_t h = h0_ref_left; h <= h1_ref_left; ++h) {
+								const int32_t k_ref_left = startIndexRef + h;
+								if (aps.predictionWithDistributionEnabled) {
+									updateNearestNeighByDistanceAndDistribution(
+										bpoint, biasedPosRef[indexesRef[k_ref_left]],
+										indexesRef[k_ref_left], index2, localIndexes, minDistances,
+										true, localRef, true, false, intraFlag);
+								}
+								else {
+									updateNearestNeigh(
+										bpoint, biasedPosRef[indexesRef[k_ref_left]],
+										indexesRef[k_ref_left], localIndexes, minDistances, true,
+										localRef, true, false, intraFlag);
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		predictor.neighborCount = std::min(
+			aps.num_pred_nearest_neighbours_minus1 + 1,
+			(localIndexes[0] != -1) + (localIndexes[1] != -1)
+			+ (localIndexes[2] != -1));
+		if (aps.predictionWithDistributionEnabled) {
+			const int neighborCount1 = 3 + (localIndexes[3] != -1)
+				+ (localIndexes[4] != -1) + (localIndexes[5] != -1);
+
+			for (int m = 3; m < neighborCount1; m++) {
+				if (minDistances[m] == std::numeric_limits<int64_t>::max())
+					minDistances[m] = localRef[m]
+					? (bpoint - biasedPosRef[localIndexes[m]]).getNorm1()
+					: (intraFlag[m] ? (bpoint - biasedPos_indexes[localIndexes[m]]).getNorm1()
+						: (bpoint - biasedPos_retained[localIndexes[m]]).getNorm1());
+			}
+
+			for (int m = 3; m < neighborCount1; m++) {
+				for (int l = m + 1; l < neighborCount1; l++) {
+					if (minDistances[l] < minDistances[m]) {
+						auto tmpVal = localIndexes[l];
+						localIndexes[l] = localIndexes[m];
+						localIndexes[m] = tmpVal;
+
+						tmpVal = minDistances[l];
+						minDistances[l] = minDistances[m];
+						minDistances[m] = tmpVal;
+
+						const bool tmp = localRef[l];
+						localRef[l] = localRef[m];
+						localRef[m] = tmp;
+
+						bool tmpIntra = intraFlag[l];
+						intraFlag[l] = intraFlag[m];
+						intraFlag[m] = tmpIntra;
+					}
+				}
+			}
+
+			bool replaceFlag = true;
+			//indicates whether the third neighbor needs to be replaced
+			if (predictor.neighborCount >= 3) {
+				int dir[6] = { -1, -1, -1, -1, -1, -1 };
+
+				const int looseDirTable[8][3] = { {3, 5, 6}, {2, 4, 7}, {1, 4, 7},
+												 {0, 5, 6}, {1, 2, 7}, {0, 3, 6},
+												 {0, 3, 5}, {1, 2, 4} };
+				// the direction coplanar with the opposite direction of 0, 1, 2, 3, 4, 5, 6, 7.
+
+				int numend1 = 0;
+				for (numend1 = 3; numend1 < neighborCount1; ++numend1)
+					if (
+						(minDistances[numend1] << 5) >= minDistances[2] * distCoefficient)
+						break;
+
+				//direction of neighbors
+				for (int h = 0; h < numend1; ++h)
+					dir[h] = localRef[h]
+					? (biasedPosRef[localIndexes[h]] - bpoint).getDir()
+					: (intraFlag[h] ? (biasedPos_indexes[localIndexes[h]] - bpoint).getDir()
+						: (biasedPos_retained[localIndexes[h]] - bpoint).getDir());
+
+				int replaceIdx = -1;
+				if (
+					dir[1] == 7 - dir[0] || dir[2] == 7 - dir[0] || dir[2] == 7 - dir[1])
+					replaceFlag = false;
+				for (int h = 3; replaceFlag && h < numend1; ++h) {
+					if ((dir[h] == 7 - dir[0]) || (dir[h] == 7 - dir[1])) {
+						replaceFlag = false;
+						replaceIdx = h;
+					}
+				}
+				bool equal01 = dir[0] == dir[1];
+				bool equal02 = dir[0] == dir[2];
+				bool equal12 = dir[1] == dir[2];
+				const auto& looseDirs0 = looseDirTable[dir[0]];
+				if (replaceFlag) {
+					if ((equal02 || equal12) && equal01) {
+						for (int h = 3; replaceFlag && h < numend1; h++) {
+							if (
+								dir[h] == looseDirs0[0] || dir[h] == looseDirs0[1]
+								|| dir[h] == looseDirs0[2]) {
+								replaceFlag = false;
+								replaceIdx = h;
+							}
+						}
+					}
+					else if ((equal02 || equal12) && !equal01) {
+						if (!(dir[1] == looseDirs0[0] || dir[1] == looseDirs0[1]
+							|| dir[1] == looseDirs0[2]))
+							for (int h = 3; replaceFlag && h < numend1; h++)
+								if (dir[h] != dir[0] && dir[h] != dir[1]) {
+									replaceFlag = false;
+									replaceIdx = h;
+								}
+					}
+					else if (equal01) {
+						if (!(dir[2] == looseDirs0[0] || dir[2] == looseDirs0[1]
+							|| dir[2] == looseDirs0[2]))
+							for (int h = 3; replaceFlag && h < numend1; h++) {
+								if (
+									dir[h] == looseDirs0[0] || dir[h] == looseDirs0[1]
+									|| dir[h] == looseDirs0[2]) {
+									replaceFlag = false;
+									replaceIdx = h;
+								}
+							}
+					}
+				}
+				if (replaceIdx >= 0) {
+					localIndexes[2] = localIndexes[replaceIdx];
+					localRef[2] = localRef[replaceIdx];
+					intraFlag[2] = intraFlag[replaceIdx];
+				}
+			}
+		}
+		for (int32_t h = 0; h < predictor.neighborCount; ++h) {
+			auto& neigh = predictor.neighbors[h];
+			neigh.interFrameRef = localRef[h];
+			if (interRef && neigh.interFrameRef) {
+				neigh.predictorIndex = packedVoxelRef[localIndexes[h]].index;
+				neigh.weight =
+					(biasedPosRef[localIndexes[h]] - bpoint).getNorm2<int64_t>();
+			}
+			else {
+				if (intraFlag[h]) {
+					neigh.predictorIndex = packedVoxel[indexes[localIndexes[h]]].index;
+					neigh.weight = (biasedPos_indexes[localIndexes[h]] - bpoint).getNorm2<int64_t>();
+					localIndexes[h] = indexes[localIndexes[h]];
+				}
+				else {
+					neigh.predictorIndex = packedVoxel[retained[localIndexes[h]]].index;
+					neigh.weight = (biasedPos_retained[localIndexes[h]] - bpoint).getNorm2<int64_t>();
+					localIndexes[h] = retained[localIndexes[h]];
+				}
+			}
+		}
+
+		// Prune neighbours based upon max neigh range.
+		if (aps.scalable_lifting_enabled_flag) {
+			int maxNeighRange = aps.max_neigh_range_minus1 + 1;
+			int64_t maxDistance = 3ll * maxNeighRange << 2 * lodIndex;
+			if (aps.lodNeighBias == 1) {
+				predictor.pruneDistanceGt(maxDistance);
+			}
+			else {
+				auto curPt = clacIntermediatePosition(true, lodIndex, pv.position);
+
+				for (int h = 1; h < predictor.neighborCount; h++) {
+					auto neighPt = clacIntermediatePosition(
+						true, lodIndex, packedVoxel[localIndexes[h]].position);
+
+					// Discard this and subsequent points if distance limit exceeded
+					auto norm2 = (curPt - neighPt).getNorm2<int64_t>();
+					if (norm2 > maxDistance) {
+						predictor.neighborCount = h;
+						break;
+					}
+				}
+			}
+		}
+
+		if (predictor.neighborCount > 1) {
+			if (predictor.neighbors[0].weight > predictor.neighbors[1].weight)
+				std::swap(predictor.neighbors[1], predictor.neighbors[0]);
+			if (predictor.neighborCount == 3) {
+				if (predictor.neighbors[1].weight > predictor.neighbors[2].weight) {
+					std::swap(predictor.neighbors[2], predictor.neighbors[1]);
+					if (predictor.neighbors[0].weight > predictor.neighbors[1].weight)
+						std::swap(predictor.neighbors[1], predictor.neighbors[0]);
+				}
+			}
+		}
+	}
+}
+//---------------------------------------------------------------------------
+
+inline void
+computeNearestNeighbors(
+	const AttributeParameterSet& aps,
+	const AttributeBrickHeader& abh,
+	const std::vector<MortonCodeWithIndex>& packedVoxel,
+	const std::vector<uint32_t>& retained,
+	int32_t startIndex,
+	int32_t endIndex,
+	int32_t lodIndex,
+	std::vector<uint32_t>& indexes,
+	std::vector<PCCPredictor>& predictors,
+	std::vector<uint32_t>& pointIndexToPredictorIndex,
+	int32_t& predIndex,
+	MortonIndexMap3d& atlas,
+	MortonIndexMap3d& interAtlas,
+	bool layerGroupEnabledFlag,
+	const int curLayerGroup,
+	const int curSubgroup,
+	std::vector<point_t> biasedPos_indexes,
+	std::vector<point_t> biasedPos_retained)
+{
+	std::vector<MortonCodeWithIndex> packedVoxelRef = {};
+	int32_t startIndexRef = 0;
+	int32_t endIndexRef = 0;
+	std::vector<uint32_t> indexesRef = {};
+	computeNearestNeighbors(
+		aps, abh, packedVoxel, retained, startIndex, endIndex, lodIndex, indexes,
+		predictors, pointIndexToPredictorIndex, predIndex, atlas, interAtlas, false,
+		packedVoxelRef, startIndexRef, endIndexRef, indexesRef
+		, layerGroupEnabledFlag, curLayerGroup, curSubgroup, biasedPos_indexes, biasedPos_retained);
+}
+
+//---------------------------------------------------------------------------
+
+inline void
+buildPredictorsFast_forFullLayerGroupSlicingEncoder(
+	const AttributeParameterSet& aps,
+	const AttributeBrickHeader& abh,
+	const PCCPointSet3& pointCloud,
+	int32_t minGeomNodeSizeLog2,
+	int geom_num_points_minus1,
+	std::vector<PCCPredictor>& predictors,
+	std::vector<uint32_t>& numberOfPointsPerLevelOfDetail,
+	std::vector<uint32_t>& indexes
+	, bool interRef,
+	const AttributeInterPredParams& attrInterPredParams,
+	std::vector<uint32_t>& numberOfPointsPerLevelOfDetailRef,
+	std::vector<uint32_t>& indexesRef,
+	bool layerGroupEnabledFlag,
+	int rootNodeSizeLog2,
+	int rootNodeSizeLog2_coded,
+	std::vector<std::vector<std::vector<uint32_t>>> dcmNodesIdx,
+	std::vector<int> numLayersPerLayerGroup,
+	std::vector<std::vector<Vec3<int>>> subgrpBboxOrigin,
+	std::vector<std::vector<Vec3<int>>> subgrpBboxSize,
+	std::vector<std::vector<int>> sliceSelectionIndicationFlag,
+	std::vector<int>& numberOfPointsPerLodPerSubgroups,
+
+	std::vector<int>* numRefNodesInTheSameSubgroup = nullptr)
+{
+	const int32_t pointCount = int32_t(pointCloud.getPointCount());
+	assert(pointCount);
+
+	std::vector<MortonCodeWithIndex> packedVoxel;
+	computeMortonCodesUnsorted(pointCloud, aps.lodNeighBias, packedVoxel);
+
+	if (!aps.canonical_point_order_flag && !aps.max_points_per_sort_log2_plus1) {
+		std::sort(packedVoxel.begin(), packedVoxel.end());
+	}
+	else if (aps.max_points_per_sort_log2_plus1 > 1) {
+		int maxPtsPerSort = 1 << (aps.max_points_per_sort_log2_plus1 - 1);
+		for (int i = 0; i < pointCount; i += maxPtsPerSort) {
+			int iEnd = std::min(i + maxPtsPerSort, int(pointCount));
+			std::sort(packedVoxel.begin() + i, packedVoxel.begin() + iEnd);
+		}
+	}
+
+	std::vector<uint32_t> retained, input, pointIndexToPredictorIndex;
+	pointIndexToPredictorIndex.resize(pointCount);
+	retained.reserve(pointCount);
+
+	std::vector<uint32_t> pointIdxToPackedVoxelIdx;
+	std::vector<uint32_t> dcmNodesList;
+	std::vector<std::vector<int>> pointIdxToSubgroupIdx;
+	bool dcmNodesPresentFlag = false;
+	int treeLvlGap = 0;
+	std::vector<int> bitShift;
+
+	int maxNumLayer = 0;
+	int numLayerGroups = numLayersPerLayerGroup.size();
+	std::vector<int> numSubgroups;
+	std::vector<int> accNumLayers;
+	if (layerGroupEnabledFlag) {
+		treeLvlGap = rootNodeSizeLog2 - rootNodeSizeLog2_coded;
+
+		pointIdxToPackedVoxelIdx.resize(pointCount);
+		for (uint32_t i = 0; i < pointCount; i++) {
+			auto pointIdx = packedVoxel[i].index;
+			pointIdxToPackedVoxelIdx[pointIdx] = i;
+		}
+
+		numSubgroups.resize(numLayerGroups);
+		for (int i = 0; i < numLayerGroups; i++) {
+			maxNumLayer += numLayersPerLayerGroup[i];
+			numSubgroups[i] = subgrpBboxOrigin[i].size();
+		}
+
+		int layerIdx = 0;
+		int dcmNodesCount = 0;
+		for (int i = 0; i < numLayerGroups; i++) {
+			for (int j = 0; j < numLayersPerLayerGroup[i]; j++, layerIdx++) {
+				for (int sbgrIdx = 0; sbgrIdx < numSubgroups[i]; sbgrIdx++) {
+					if (dcmNodesIdx[layerIdx][sbgrIdx].size() && layerIdx < maxNumLayer - 1) {
+						for (int m = 0; m < dcmNodesIdx[layerIdx][sbgrIdx].size(); m++) {
+							auto pointIdx = dcmNodesIdx[layerIdx][sbgrIdx][m];
+							auto packedVoxelIndex = pointIdxToPackedVoxelIdx[pointIdx];
+							dcmNodesList.push_back(packedVoxelIndex);
+						}
+					}
+				}
+			}
+		}
+
+		if (dcmNodesList.size()) {
+			std::sort(dcmNodesList.begin(), dcmNodesList.end());
+
+			dcmNodesPresentFlag = true;
+
+			input.resize(pointCount - dcmNodesList.size());
+			int dcmIdx = 0;
+			int nonIdcmIdx = 0;
+			for (uint32_t i = 0; i < pointCount; ++i) {
+				uint32_t packedVoxelIndex;
+				if (dcmIdx < dcmNodesList.size()) {
+					packedVoxelIndex = dcmNodesList[dcmIdx];
+					if (packedVoxel[packedVoxelIndex].mortonCode == packedVoxel[i].mortonCode)
+						dcmIdx++;
+					else if (nonIdcmIdx < input.size())
+						input[nonIdcmIdx++] = i;
+					else {}
+				}
+				else if (nonIdcmIdx < input.size())
+					input[nonIdcmIdx++] = i;
+				else {}
+			}
+
+			dcmNodesList.clear();
+			dcmNodesList.shrink_to_fit();
+		}
+		else {
+			input.resize(pointCount);
+			for (uint32_t i = 0; i < pointCount; ++i)
+				input[i] = i;
+		}
+
+		accNumLayers.resize(numLayerGroups);
+		accNumLayers[0] = numLayersPerLayerGroup[0];
+		if (numLayerGroups > 1)
+			for (int i = 1; i < numLayerGroups; i++) {
+				accNumLayers[i] = accNumLayers[i - 1] + numLayersPerLayerGroup[i];
+			}
+
+		bitShift.resize(numLayerGroups);
+		for (int i = 0; i < numLayerGroups; i++) {
+			bitShift[i] = accNumLayers[numLayerGroups - 1] - accNumLayers[i];
+		}
+
+		pointIdxToSubgroupIdx.resize(pointCount);
+		for (int pointIdx = 0; pointIdx < pointCount; pointIdx++) {
+			pointIdxToSubgroupIdx[pointIdx].resize(numLayerGroups);
+
+			for (int lyrGrpIdx = 1; lyrGrpIdx < numLayerGroups; lyrGrpIdx++) {
+				int shift = bitShift[lyrGrpIdx];
+				auto pos = (pointCloud[pointIdx] >> shift) << (shift + treeLvlGap);
+				for (int subGrpIdx = 0; subGrpIdx < numSubgroups[lyrGrpIdx]; subGrpIdx++) {
+					auto bbox_min = subgrpBboxOrigin[lyrGrpIdx][subGrpIdx];
+					auto bbox_max = bbox_min + subgrpBboxSize[lyrGrpIdx][subGrpIdx];
+
+					if (pos.x() >= bbox_min[0] && pos.x() < bbox_max[0]
+						&& pos.y() >= bbox_min[1] && pos.y() < bbox_max[1]
+						&& pos.z() >= bbox_min[2] && pos.z() < bbox_max[2]) {
+						pointIdxToSubgroupIdx[pointIdx][lyrGrpIdx] = subGrpIdx;
+						break;
+					}
+				}
+			}
+		}
+	}
+	else {
+		input.resize(pointCount);
+		for (uint32_t i = 0; i < pointCount; ++i) {
+			input[i] = i;
+		}
+	}
+
+	// prepare output buffers
+	predictors.resize(pointCount);
+	numberOfPointsPerLevelOfDetail.resize(0);
+	indexes.resize(0);
+	indexes.reserve(pointCount);
+	numberOfPointsPerLevelOfDetail.reserve(21);
+	numberOfPointsPerLevelOfDetail.push_back(pointCount);
+
+	const auto& referencePointCloud = attrInterPredParams.referencePointCloud;
+	const int32_t pointCountRef = int32_t(referencePointCloud.getPointCount());
+	std::vector<MortonCodeWithIndex> packedVoxelRef = {};
+	int32_t startIndexRef = 0, endIndexRef = 0;
+	if (interRef) {
+		assert(referencePointCloud.getPointCount());
+		computeMortonCodesUnsorted(
+			referencePointCloud, aps.lodNeighBias, packedVoxelRef);
+		if (
+			!aps.canonical_point_order_flag && !aps.max_points_per_sort_log2_plus1) {
+			std::sort(packedVoxelRef.begin(), packedVoxelRef.end());
+		}
+		else if (aps.max_points_per_sort_log2_plus1 > 1) {
+			int maxPtsPerSort = 1 << (aps.max_points_per_sort_log2_plus1 - 1);
+			for (int i = 0; i < pointCount; i += maxPtsPerSort) {
+				int iEnd = std::min(i + maxPtsPerSort, int(pointCount));
+				std::sort(packedVoxelRef.begin() + i, packedVoxelRef.begin() + iEnd);
+			}
+		}
+		//retainedRef.reserve(pointCountRef);
+
+		numberOfPointsPerLevelOfDetailRef.resize(0);
+		indexesRef.resize(0);
+		indexesRef.reserve(pointCountRef);
+		numberOfPointsPerLevelOfDetailRef.reserve(21);
+		numberOfPointsPerLevelOfDetailRef.push_back(pointCountRef);
+		startIndexRef = 0;
+		endIndexRef = pointCountRef;
+	}
+
+	bool concatenateLayers = aps.scalable_lifting_enabled_flag;
+	if (layerGroupEnabledFlag)
+		concatenateLayers = false;
+	std::vector<uint32_t> indexesOfSubsample;
+	if (concatenateLayers)
+		indexesOfSubsample.reserve(pointCount);
+
+	std::vector<Box3<int32_t>> bBoxes;
+
+	const int32_t log2CubeSize = 7;
+	MortonIndexMap3d atlas;
+	atlas.resize(log2CubeSize);
+	atlas.init();
+
+	const int32_t interLog2CubeSize = 3;
+	MortonIndexMap3d interAtlas;  ///< inter predicton atlas
+	if (interRef) {
+		interAtlas.resize(interLog2CubeSize);
+		interAtlas.init();
+		interAtlas.reserve(pointCountRef);
+	}
+	if (interRef) {
+		indexesRef.resize(pointCountRef);
+		for (uint32_t i = 0; i < pointCountRef; ++i)
+			indexesRef[i] = i;
+	}
+
+	auto maxNumDetailLevels = aps.maxNumDetailLevels();
+	int32_t predIndex = int32_t(pointCount);
+
+	std::vector<int> predIdxToSubgroupMap;
+	std::vector<int> predIdxToLayerGroupMap;
+	if (layerGroupEnabledFlag) {
+		predIdxToLayerGroupMap.resize(pointCount, -1);
+		predIdxToSubgroupMap.resize(pointCount, -1);
+		maxNumDetailLevels = maxNumLayer + 1;
+	}
+	int maxLoD = 0;
+
+	for (auto lodIndex = minGeomNodeSizeLog2;
+		!input.empty() && lodIndex < maxNumDetailLevels; ++lodIndex) {
+		
+
+		const int32_t startIndex = indexes.size();
+		if (lodIndex == maxNumDetailLevels - 1) {
+			for (const auto index : input) {
+				indexes.push_back(index);
+			}
+		}
+		else {
+
+			subsample(
+				aps, abh, pointCloud, packedVoxel, input, lodIndex, retained, indexes,
+				atlas);
+		}
+		const int32_t endIndex = indexes.size();
+
+		int shiftLayerGroup = 0;
+		int shiftPrtLayerGroup = 0;
+
+		int curLayerGroup = 0;
+		int curSubgroup = 0;
+		int prtLayerGroup = 0;
+		int prtSubgroup = 0;
+
+		std::vector<std::vector<uint32_t>> retained_subgroup, indexes_subgroup;
+		std::vector<point_t> biasedPos_indexes, biasedPos_retained;
+
+		if (layerGroupEnabledFlag) {
+			int layerIdx = maxNumLayer - lodIndex;
+			int accNumLayers = 0;
+			for (int m = 0; m < numLayerGroups; m++) {
+				accNumLayers += numLayersPerLayerGroup[m];
+				if (accNumLayers >= layerIdx) {
+					curLayerGroup = m;
+					break;
+				}
+			}
+
+			if (accNumLayers - numLayersPerLayerGroup[curLayerGroup] + 1 == layerIdx && curLayerGroup > 0)
+				prtLayerGroup = curLayerGroup - 1;
+			else
+				prtLayerGroup = curLayerGroup;
+
+			retained_subgroup.resize(numSubgroups[prtLayerGroup]);
+			indexes_subgroup.resize(numSubgroups[curLayerGroup]);
+
+			std::vector<std::vector<uint32_t>> dcmNodeList_ParentSubgroup;
+			int layerIdx_minus1 = layerIdx - 1;
+
+			if (dcmNodesPresentFlag) {
+				dcmNodeList_ParentSubgroup.resize(numSubgroups[prtLayerGroup]);
+				int lyrGrpIdx = 0;
+				if (layerIdx_minus1 > 0) {
+					for (int curLodIndex = 0; curLodIndex < layerIdx_minus1; curLodIndex++) {
+						lyrGrpIdx = 0;
+						int accNumLayers = 0;
+						for (int m = 0; m < numLayerGroups; m++) {
+							accNumLayers += numLayersPerLayerGroup[m];
+
+							if (accNumLayers > curLodIndex) {
+								lyrGrpIdx = m;
+								break;
+							}
+						}
+
+						for (int m = 0; m < numSubgroups[lyrGrpIdx]; m++) {
+							if (true) {		//if (sliceSelectionIndicationFlag[lyrGrpIdx][m]) {
+								for (int k = 0; k < dcmNodesIdx[curLodIndex][m].size(); k++) {
+									auto pointCloudIndex = dcmNodesIdx[curLodIndex][m][k];
+									auto packedVoxelIndex = pointIdxToPackedVoxelIdx[pointCloudIndex];
+									int subgrpIdx = pointIdxToSubgroupIdx[pointCloudIndex][prtLayerGroup];
+
+									dcmNodeList_ParentSubgroup[subgrpIdx].push_back(packedVoxelIndex);
+								}
+							}
+						}
+					}
+				}
+			}
+
+			for (int i = 0; i < retained.size(); i++) {
+				prtSubgroup = pointIdxToSubgroupIdx[packedVoxel[retained[i]].index][prtLayerGroup];
+				retained_subgroup[prtSubgroup].push_back(retained[i]);
+			}
+
+			if (dcmNodesPresentFlag) {
+				for (int i = 0; i < numSubgroups[prtLayerGroup]; i++) {
+					if (true		//if (sliceSelectionIndicationFlag[prtLayerGroup][i]
+						&& dcmNodeList_ParentSubgroup[i].size()) {
+						for (int j = 0; j < dcmNodeList_ParentSubgroup[i].size(); j++)
+							retained_subgroup[i].push_back(dcmNodeList_ParentSubgroup[i][j]);
+						std::sort(retained_subgroup[i].begin(), retained_subgroup[i].end());
+					}
+					dcmNodeList_ParentSubgroup[i].clear();
+					dcmNodeList_ParentSubgroup[i].shrink_to_fit();
+				}
+				dcmNodeList_ParentSubgroup.clear();
+				dcmNodeList_ParentSubgroup.shrink_to_fit();
+
+				if (layerIdx >= 2) {
+					auto prev = retained.size();
+					int parentLayerIndex = layerIdx - 2;
+					for (int i = 0; i < numSubgroups[prtLayerGroup]; i++) {
+						if (true) {		//if (sliceSelectionIndicationFlag[prtLayerGroup][i]) {
+							for (int k = 0; k < dcmNodesIdx[parentLayerIndex][i].size(); k++) {
+								auto pointCloudIndex = dcmNodesIdx[parentLayerIndex][i][k];
+
+								auto packedVoxelIndex = pointIdxToPackedVoxelIdx[pointCloudIndex];
+								retained.push_back(packedVoxelIndex);
+							}
+						}
+					}
+					std::sort(retained.begin(), retained.end());
+				}
+			}
+
+			for (int i = startIndex; i < endIndex; i++) {
+				curSubgroup = pointIdxToSubgroupIdx[packedVoxel[indexes[i]].index][curLayerGroup];
+
+				if (true) 		//if (sliceSelectionIndicationFlag[curLayerGroup][curSubgroup])
+					indexes_subgroup[curSubgroup].push_back(indexes[i]);
+			}
+		}
+		else {
+			biasedPos_indexes.reserve(indexes.size());
+			for (int k = 0; k < indexes.size(); k++) {
+				auto point = clacIntermediatePosition(
+					aps.scalable_lifting_enabled_flag, lodIndex, pointCloud[packedVoxel[indexes[k]].index]);
+				biasedPos_indexes.push_back(times(point, aps.lodNeighBias));
+			}
+
+			biasedPos_retained.reserve(retained.size());
+			for (int k = 0; k < retained.size(); k++) {
+				auto point = clacIntermediatePosition(
+					aps.scalable_lifting_enabled_flag, lodIndex, pointCloud[packedVoxel[retained[k]].index]);
+				biasedPos_retained.push_back(times(point, aps.lodNeighBias));
+			}
+		}
+
+		if (concatenateLayers
+			&& !layerGroupEnabledFlag) {
+			indexesOfSubsample.resize(endIndex);
+			if (startIndex != endIndex) {
+				for (int32_t i = startIndex; i < endIndex; i++)
+					indexesOfSubsample[i] = indexes[i];
+
+				int32_t numOfPointInSkipped = geom_num_points_minus1 + 1 - pointCount;
+				if (endIndex - startIndex <= startIndex + numOfPointInSkipped) {
+					concatenateLayers = false;
+				}
+				else {
+					for (int32_t i = 0; i < startIndex; i++)
+						indexes[i] = indexesOfSubsample[i];
+
+					// reset predIndex
+					predIndex = pointCount;
+					for (int lod = 0; lod < lodIndex - minGeomNodeSizeLog2; lod++) {
+						int divided_startIndex =
+							pointCount - numberOfPointsPerLevelOfDetail[lod];
+						int divided_endIndex =
+							pointCount - numberOfPointsPerLevelOfDetail[lod + 1];
+
+						computeNearestNeighbors(
+							aps, abh, packedVoxel, retained, divided_startIndex,
+							divided_endIndex, lod + minGeomNodeSizeLog2, indexes, predictors,
+							pointIndexToPredictorIndex, predIndex, atlas, interAtlas
+							, layerGroupEnabledFlag, curLayerGroup, curSubgroup
+							, biasedPos_indexes, biasedPos_retained);
+					}
+				}
+			}
+		}
+
+		int numIndexedNodes = 0;
+		if (layerGroupEnabledFlag) {
+			indexes.resize(startIndex);
+
+			int count = 0;
+			for (int i = 0; i < numSubgroups[curLayerGroup]; i++) {
+				if (true) {//if (sliceSelectionIndicationFlag[curLayerGroup][i]) {
+					if (curLayerGroup == prtLayerGroup)
+						prtSubgroup = i;
+					else {
+						auto cur_bbox_min = subgrpBboxOrigin[curLayerGroup][i];
+						auto cur_bbox_max = cur_bbox_min + subgrpBboxSize[curLayerGroup][i];
+						for (int m = 0; m < numSubgroups[prtLayerGroup]; m++) {
+							auto bbox_min = subgrpBboxOrigin[prtLayerGroup][m];
+							auto bbox_max = bbox_min + subgrpBboxSize[prtLayerGroup][m];
+							if (cur_bbox_min.x() >= bbox_min[0] && cur_bbox_max.x() <= bbox_max[0]
+								&& cur_bbox_min.y() >= bbox_min[1] && cur_bbox_max.y() <= bbox_max[1]
+								&& cur_bbox_min.z() >= bbox_min[2] && cur_bbox_max.z() <= bbox_max[2]) {
+								prtSubgroup = m;
+								break;
+							}
+						}
+					}
+
+					std::vector<uint32_t> retained_subgroup_parent;
+					auto bbox_min = subgrpBboxOrigin[curLayerGroup][i];
+					auto bbox_max = bbox_min + subgrpBboxSize[curLayerGroup][i];
+					for (int i = 0; i < retained_subgroup[prtSubgroup].size(); i++) {
+
+						int packedVoxelIdx = retained_subgroup[prtSubgroup][i];
+						int pointIdx = packedVoxel[packedVoxelIdx].index;
+						auto pos = pointCloud[pointIdx];
+
+						if (pos.x() >= bbox_min.x() && pos.x() < bbox_max.x()
+							&& pos.y() >= bbox_min.y() && pos.y() < bbox_max.y()
+							&& pos.z() >= bbox_min.z() && pos.z() < bbox_max.z())
+							retained_subgroup_parent.push_back(packedVoxelIdx);
+					}
+
+					int startIndex_subgroup = 0;
+					int endIndex_subgroup = indexes_subgroup[i].size();
+
+					int curSubgroup = i;
+
+					shiftLayerGroup = bitShift[curLayerGroup];
+					shiftPrtLayerGroup = bitShift[prtLayerGroup];
+
+					biasedPos_indexes.reserve(indexes_subgroup[curSubgroup].size());
+					for (int k = 0; k < indexes_subgroup[curSubgroup].size(); k++) {
+						auto pos = pointCloud[packedVoxel[indexes_subgroup[curSubgroup][k]].index];
+						auto point = pos;
+						biasedPos_indexes.push_back(times((point >> shiftLayerGroup) << (shiftLayerGroup + treeLvlGap), aps.lodNeighBias));
+					}
+
+					biasedPos_retained.reserve(retained_subgroup_parent.size());
+					auto cur_bbox_min = subgrpBboxOrigin[curLayerGroup][i];
+					auto cur_bbox_max = cur_bbox_min + subgrpBboxSize[curLayerGroup][i];
+
+					for (int k = 0; k < retained_subgroup_parent.size(); k++) {
+						auto pos = pointCloud[packedVoxel[retained_subgroup_parent[k]].index];
+						auto point = pos;
+
+						if (prtLayerGroup != curLayerGroup) {
+							if (pos.x() >= cur_bbox_min.x() && pos.x() < cur_bbox_max.x()
+								&& pos.y() >= cur_bbox_min.y() && pos.y() < cur_bbox_max.y()
+								&& pos.z() >= cur_bbox_min.z() && pos.z() < cur_bbox_max.z()) {
+								biasedPos_retained.push_back(times((point >> shiftLayerGroup) << (shiftLayerGroup + treeLvlGap), aps.lodNeighBias));
+							}
+							else
+								biasedPos_retained.push_back(times((point >> shiftPrtLayerGroup) << (shiftPrtLayerGroup + treeLvlGap), aps.lodNeighBias));
+						}
+						else
+							biasedPos_retained.push_back(times((point >> shiftLayerGroup) << (shiftLayerGroup + treeLvlGap), aps.lodNeighBias));
+					}
+					computeNearestNeighbors(
+						aps, abh, packedVoxel, retained_subgroup_parent, startIndex_subgroup, endIndex_subgroup, lodIndex, indexes_subgroup[curSubgroup],
+						predictors, pointIndexToPredictorIndex, predIndex, atlas, interAtlas
+						, layerGroupEnabledFlag, curLayerGroup, curSubgroup, biasedPos_indexes, biasedPos_retained
+					);
+
+					for (int m = startIndex_subgroup; m < endIndex_subgroup; m++)
+					{
+						int cur_subgroup = i;
+						predIdxToLayerGroupMap.push_back(curLayerGroup);
+						predIdxToSubgroupMap.push_back(cur_subgroup);
+						indexes.push_back(indexes_subgroup[cur_subgroup][m]);
+					}
+					numIndexedNodes += indexes_subgroup[i].size();
+
+					numberOfPointsPerLodPerSubgroups.push_back(indexes_subgroup[i].size());
+
+					biasedPos_indexes.clear();
+					biasedPos_retained.clear();
+					biasedPos_indexes.shrink_to_fit();
+					biasedPos_retained.shrink_to_fit();
+
+					indexes_subgroup[i].clear();
+					indexes_subgroup[i].shrink_to_fit();
+				}
+				else {
+					numberOfPointsPerLodPerSubgroups.push_back(0);
+
+					indexes_subgroup[i].clear();
+					indexes_subgroup[i].shrink_to_fit();
+				}
+			}
+
+		}
+		else {
+			computeNearestNeighbors(
+				aps, abh, packedVoxel, retained, startIndex, endIndex, lodIndex, indexes,
+				predictors, pointIndexToPredictorIndex, predIndex, atlas, interAtlas
+				, interRef,
+				packedVoxelRef, startIndexRef, endIndexRef, indexesRef
+				, layerGroupEnabledFlag, curLayerGroup, curSubgroup
+				, biasedPos_indexes, biasedPos_retained
+			);
+		}
+
+		if (layerGroupEnabledFlag) {
+			if (pointCount > indexes.size())
+				numberOfPointsPerLevelOfDetail.push_back(pointCount - indexes.size());
+
+
+			for (int i = 0; i < retained_subgroup.size(); i++) {
+				retained_subgroup[i].clear();
+				retained_subgroup[i].shrink_to_fit();
+			}
+		}
+		else {
+			if (!retained.empty()) {
+				numberOfPointsPerLevelOfDetail.push_back(retained.size());
+				if (interRef)
+					numberOfPointsPerLevelOfDetailRef.push_back(retained.size());
+			}
+		}
+		input.resize(0);
+		std::swap(retained, input);
+	}
+	std::reverse(indexes.begin(), indexes.end());
+	updatePredictors(pointIndexToPredictorIndex, predictors, attrInterPredParams.frameDistance);
+	//updatePredictors(pointIndexToPredictorIndex, predictors);
+	std::reverse(
+		numberOfPointsPerLevelOfDetail.begin(),
+		numberOfPointsPerLevelOfDetail.end());
+
+	if (layerGroupEnabledFlag && abh.subgroup_weight_adjustment_enabled_flag)
+		(*numRefNodesInTheSameSubgroup).resize(pointCount, 0);
+
+	if (layerGroupEnabledFlag) {
+		std::reverse(predIdxToLayerGroupMap.begin(), predIdxToLayerGroupMap.end());
+		std::reverse(predIdxToSubgroupMap.begin(), predIdxToSubgroupMap.end());
+
+		for (int i = 0; i < pointCount; i++) {
+			auto& predictor = predictors[i];
+			int curLayerGroup = predIdxToLayerGroupMap[i];
+			int curSubgroup = predIdxToSubgroupMap[i];
+
+			for (int k = 0; k < predictor.neighborCount; k++) {
+				int idx = predictor.neighbors[k].predictorIndex;
+
+				int neighborLayerGroup = predIdxToLayerGroupMap[idx];
+				int neighborSubgroup = predIdxToSubgroupMap[idx];
+
+				if (neighborLayerGroup == curLayerGroup && neighborSubgroup == curSubgroup) {
+					predictor.neighbors[k].inTheSameSubgroupFlag = true;
+					if (abh.subgroup_weight_adjustment_enabled_flag)
+						(*numRefNodesInTheSameSubgroup)[idx]++;
+				}
+				else
+					predictor.neighbors[k].inTheSameSubgroupFlag = false;
+			}
+		}
+	}
+	else {
+		for (int i = 0; i < pointCount; i++) {
+			auto& predictor = predictors[i];
+
+			for (int k = 0; k < predictor.neighborCount; k++) {
+				predictor.neighbors[k].inTheSameSubgroupFlag = true;
+			}
+		}
+	}
+
+	if (layerGroupEnabledFlag)
+		std::reverse(
+			numberOfPointsPerLodPerSubgroups.begin(),
+			numberOfPointsPerLodPerSubgroups.end());
+}
+//++++++++++++++++++++++++++++++++++++++++++++++
+//---------------------------------------------------------------------------
+
+
+
 
 }  // namespace pcc
 

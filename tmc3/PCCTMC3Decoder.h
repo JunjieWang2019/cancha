@@ -46,6 +46,9 @@
 #include "framectr.h"
 #include "geometry.h"
 #include "hls.h"
+#include "geometry_octree.h"
+#include "ringbuf.h"
+#include "layerGroupSlicing.h"
 
 namespace pcc {
 
@@ -62,6 +65,14 @@ struct DecoderParams {
 
   // Number of fractional bits used in output position representation.
   int outputFpBits;
+
+  // layer-group slicing 
+  bool roiEnabledFlag;
+  Vec3<double> roiPointScale;
+  Vec3<int> roiSize;
+  int numSkipLayerGroups;
+
+  Vec3<int> roiOrigin;
 };
 
 //============================================================================
@@ -87,6 +98,7 @@ public:
   void storeGps(GeometryParameterSet&& gps);
   void storeAps(AttributeParameterSet&& aps);
   void storeTileInventory(TileInventory&& inventory);
+  void storeLayerGroupStructureInventory(LayerGroupStructureInventory&& inventory);
 
   //==========================================================================
   void setMotionVectorFileName(std::string s) { motionVectorFileName = s; }
@@ -110,6 +122,8 @@ private:
   void processHierarchicalGOF();
   void processHierarchicalGOFPost();
 
+  int decodeDependentGeometryBrick(const PayloadBuffer& buf);
+  void decodeDependentAttributeBrick(const PayloadBuffer& buf);
   //==========================================================================
 
 private:
@@ -174,6 +188,8 @@ private:
   // Metadata that allows slices/tiles to be indentified by their bounding box
   TileInventory _tileInventory;
 
+  LayerGroupStructureInventory _layerGroupStructureInventory;
+
   // The active SPS
   const SequenceParameterSet* _sps;
   const GeometryParameterSet* _gps;
@@ -183,6 +199,9 @@ private:
   CloudFrame* _refFrameAlt;
 
   GeometryBrickHeader _gbh;
+  DependentGeometryDataUnitHeader _dep_gbh;	
+  
+  std::vector<AttributeBrickHeader> _abh;  
 
   // Memorized context buffers
   std::unique_ptr<GeometryOctreeContexts> _ctxtMemOctreeGeom;
@@ -203,6 +222,15 @@ private:
   
   BiPredictionDecodeParams biPredDecodeParams;
   HierarchicalGOFParams hGOFDecodeParams;
+
+
+  
+  LayerGroupHandler _gHandler;
+  std::vector<PCCPointSet3> _subgroupPointCloud;
+  
+  int _prevArrayIdx = -1;
+
+  std::vector<double> _codingtime;
 };
 
 //----------------------------------------------------------------------------

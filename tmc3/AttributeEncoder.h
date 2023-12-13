@@ -65,11 +65,16 @@ public:
     AttributeContexts& ctxtMem,
     PCCPointSet3& pointCloud,
     PayloadBuffer* payload,
-    AttributeInterPredParams& attrInterPredParams) override;
+    AttributeInterPredParams &attrInterPredParams,
+    AttributeGranularitySlicingParam &slicingParam) override;
 
   bool isReusable(
     const AttributeParameterSet& aps,
     const AttributeBrickHeader& abh) const override;
+
+  AttributeLods& getLods() override;
+  std::vector<uint32_t>& getIndexes() override;
+  std::vector<uint32_t>& pointIndexToPredictorIndex() override;
 
 protected:
   // todo(df): consider alternative encapsulation
@@ -80,14 +85,16 @@ protected:
     const QpSet& qpSet,
     PCCPointSet3& pointCloud,
     PCCResidualsEncoder& encoder,
-    AttributeInterPredParams& attrInterPredParams);
+    AttributeInterPredParams& attrInterPredParams,
+    AttributeGranularitySlicingParam &slicingParam);
 
   void encodeColorsLift(
     const AttributeDescription& desc,
     const AttributeParameterSet& aps,
     const QpSet& qpSet,
     PCCPointSet3& pointCloud,
-    PCCResidualsEncoder& encoder);
+    PCCResidualsEncoder& encoder,
+    AttributeGranularitySlicingParam &slicingParam);
 
   void encodeReflectancesPred(
     const AttributeDescription& desc,
@@ -95,14 +102,16 @@ protected:
     const QpSet& qpSet,
     PCCPointSet3& pointCloud,
     PCCResidualsEncoder& encoder,
-    AttributeInterPredParams& attrInterPredParams);
+    AttributeInterPredParams& attrInterPredParams,
+    AttributeGranularitySlicingParam &slicingParam);
 
   void encodeColorsPred(
     const AttributeDescription& desc,
     const AttributeParameterSet& aps,
     const QpSet& qpSet,
     PCCPointSet3& pointCloud,
-    PCCResidualsEncoder& encoder);
+    PCCResidualsEncoder& encoder,
+    AttributeGranularitySlicingParam &slicingParam);
 
   void encodeReflectancesTransformRaht(
     const AttributeDescription& desc,
@@ -171,16 +180,20 @@ protected:
 private:
   std::vector<int8_t> computeLastComponentPredictionCoeff(
     const AttributeParameterSet& aps,
-    const std::vector<Vec3<int64_t>>& coeffs);
+    const std::vector<Vec3<int64_t>>& coeffs,
+    int maxSizeOfCoeff=0);
 
   std::vector<Vec3<int8_t>> computeInterComponentPredictionCoeffs(
-    const AttributeParameterSet& aps, const PCCPointSet3& pointCloud);
+    const AttributeParameterSet& aps, const PCCPointSet3& pointCloud, PCCPointSet3* parentPointCloud=NULL, int maxSizeOfCoeff=0);
 
 private:
   // The current attribute slice header
   AttributeBrickHeader* _abh;
+  // The current attribute slice header
+  DependentAttributeDataUnitHeader* _abh_dep;
 
   AttributeLods _lods;
+  std::vector<uint32_t> _pointIndexToPredictorIndex;
 };
 
 //============================================================================

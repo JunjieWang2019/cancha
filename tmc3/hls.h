@@ -60,6 +60,9 @@ enum class PayloadType
   kUserData = 9,
   kGeometryBrickUnusedForRef = 10,
   kAttributeBrickUnusedForRef = 11,
+  kDependentGeometryDataUnit = 12,
+  kDependentAttributeDataUnit = 13,
+  kLayerGroupStructureInventory = 14,
 };
 
 //============================================================================
@@ -438,6 +441,17 @@ struct SequenceParameterSet {
   bool inter_entropy_continuation_enabled_flag;
   bool cross_attr_prediction_enabled_flag;
   bool attr_multi_encoded_order;
+
+  // layer-group slicing
+  bool layer_group_enabled_flag;
+  int num_layer_groups_minus1;
+
+  std::vector<int> layer_group_id;
+  std::vector<int> num_layers_minus1;
+  std::vector<bool> subgroup_enabled_flag;
+
+  int subgroupBboxOrigin_bits_minus1;
+  int subgroupBboxSize_bits_minus1;
 };
 
 //============================================================================
@@ -782,6 +796,86 @@ struct GeometryBrickHeader {
   std::vector<int> motion_block_size;
   int lpu_type;
   bool min_zero_origin_flag;
+
+
+  // layer-group slicing parameter
+  std::vector<bool> planarEligibleKOctreeDepth;
+
+  int numSubsequentSubgroups = 65535;
+};
+
+//============================================================================
+
+struct DependentGeometryDataUnitHeader {
+	int geom_parameter_set_id;
+	int geom_slice_id;
+	int layer_group_id;
+
+	int subgroup_id;
+	Vec3<int> subgroupBboxOrigin;
+	Vec3<int> subgroupBboxSize;
+
+	int ref_layer_group_id;
+	int ref_subgroup_id;
+
+	bool context_reference_indication_flag = true;
+
+	std::vector<bool> planarEligibleKOctreeDepth;
+
+  int numSubsequentSubgroups;
+
+	// 'Header' information that appears at the end of the data unit
+	GeometryBrickFooter footer;
+};
+
+struct LayerGroupStructureInventory {
+	struct SubGroupEntry {
+		// The sub-group id (either manually specified, or the implicit value).
+		int lgsi_subgroup_id;
+		int lgsi_parent_subgroup_id;
+
+		// NB: in stv order
+		Vec3<int> lgsi_subgroupBboxOrigin;
+		// NB: in stv order
+		Vec3<int> lgsi_subgroupBboxSize;
+	};
+	struct GroupEntry {
+		// The group id (either manually specified, or the implicit value).
+		int lgsi_layer_group_id;
+		int lgsi_num_layers_minus1;
+		int lgsi_num_subgroups_minus1;
+
+		std::vector<SubGroupEntry> subgroups;
+	};
+	struct SliceEntry {
+		int lgsi_slice_id;
+		// number of groups
+		int lgsi_num_layer_groups_minus1;
+
+		int lgsi_subgroupBboxOrigin_bits_minus1;
+		int lgsi_subgroupBboxSize_bits_minus1;
+
+		std::vector<GroupEntry> layerGroups;
+	};
+
+	// id of an applicable sequence parameter set
+	int lgsi_seq_parameter_set_id;
+
+	// Number of bits for frame idx
+	int lgsi_frame_idx_bits;
+
+	// Frame idx when tile inventory comes into force
+	int lgsi_frame_idx;
+
+	int lgsi_num_slice_ids_minus1;
+
+	std::vector<SliceEntry> slice_ids;
+
+	// Number of bits to represent the inventory origin
+	int lgsi_origin_bits_minus1;
+
+	// the origin of the tiles (in stv axis order).  Likely the sps origin
+	Vec3<int> lgsi_origin;
 };
 
 //============================================================================
@@ -883,6 +977,10 @@ struct AttributeParameterSet {
   int raht_inter_prediction_depth_minus1;
   bool raht_send_inter_filters;
   int raht_inter_skip_layers;
+  bool attr_ref_id_present_flag = false;
+
+  // not be coded
+  bool layer_group_enabled_flag = false;
 };
 
 //============================================================================
@@ -986,6 +1084,82 @@ struct AttributeBrickHeader {
   std::vector<int> RAHTFilterTaps;
 
   std::vector<int> raht_attr_layer_code_mode;
+
+  
+	bool subgroup_weight_adjustment_enabled_flag = false;
+  int subgroup_weight_adj_coeff_a_bits_minus1;
+  int subgroup_weight_adj_coeff_b_bits_minus1;
+	int64_t subgroup_weight_adj_coeff_a;
+	int64_t subgroup_weight_adj_coeff_b;
+};
+
+//============================================================================
+struct DependentAttributeDataUnitHeader {
+  int attr_sps_attr_idx;
+  int attr_attr_parameter_set_id;
+  int attr_geom_slice_id;
+
+	int layer_group_id;
+	int subgroup_id;
+
+	int ref_layer_group_id;
+	int ref_subgroup_id;
+  
+  // Last component prediction coefficients.  Only present for lifting
+  // transform with three components.
+  std::vector<int8_t> attrLcpCoeffs;
+
+  // indicates whether last component prediction coefficients are present.
+  bool lcpPresent(
+    const AttributeDescription& desc, const AttributeParameterSet& aps) const
+  {
+    if (aps.attr_encoding != AttributeEncoding::kLiftingTransform)
+      return false;
+    if (!aps.last_component_prediction_enabled_flag)
+      return false;
+    if (desc.attr_num_dimensions_minus1 != 2)
+      return false;
+    return true;
+  }
+  
+  // Inter-component prediction coefficients.
+  std::vector<Vec3<int8_t>> icpCoeffs;
+  
+  // indicates whether inter component prediction coefficients are present.
+  bool icpPresent(
+    const AttributeDescription& desc, const AttributeParameterSet& aps) const
+  {
+    if (aps.attr_encoding != AttributeEncoding::kPredictingTransform)
+      return false;
+    if (!aps.inter_component_prediction_enabled_flag)
+      return false;
+    if (desc.attr_num_dimensions_minus1 == 0)
+      return false;
+    return true;
+  }
+  
+  int attr_qp_delta_luma;
+  int attr_qp_delta_chroma;
+  
+  std::vector<int> attr_layer_qp_delta_luma;
+  std::vector<int> attr_layer_qp_delta_chroma;
+
+  bool attr_layer_qp_present_flag() const
+  {
+    return !attr_layer_qp_delta_luma.empty();
+  }
+
+  int attr_num_qp_layers_minus1() const
+  {
+    return attr_layer_qp_delta_luma.size() - 1;
+  }
+  
+	bool subgroup_weight_adjustment_enabled_flag = false;
+	int64_t subgroup_weight_adj_coeff_a;
+	int64_t subgroup_weight_adj_coeff_b;
+
+  
+	bool context_reference_indication_flag = true;
 };
 
 //============================================================================

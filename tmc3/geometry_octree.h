@@ -48,6 +48,7 @@
 #include "tables.h"
 #include "TMC3.h"
 #include "geometry.h"
+#include "frame.h"
 namespace pcc {
 
 //============================================================================
@@ -771,6 +772,7 @@ private:
 //============================================================================
 
 struct OctreePlanarState {
+  OctreePlanarState() {}
   OctreePlanarState(const GeometryParameterSet&);
 
   OctreePlanarState(const OctreePlanarState&);
@@ -841,6 +843,7 @@ int findLaser(point_t point, const int* thetaList, const int numTheta);
 class GeometryOctreeContexts {
 public:
   void reset();
+  void clear();
 
   // dynamic OBUF
   void resetMap(const bool& enableInter, const bool& enablePlanar);
@@ -920,6 +923,13 @@ GeometryOctreeContexts::reset()
   new (this) GeometryOctreeContexts;
 }
 
+//----------------------------------------------------------------------------
+inline void
+GeometryOctreeContexts::clear()
+{
+	this->~GeometryOctreeContexts();
+}
+
 //============================================================================
 // :: octree encoder exposing internal ringbuffer
 
@@ -929,12 +939,32 @@ void encodeGeometryOctree(
   GeometryBrickHeader& gbh,
   PCCPointSet3& pointCloud,
   GeometryOctreeContexts& ctxtMem,
-  std::vector<std::unique_ptr<EntropyEncoder>>& arithmeticEncoders,
+  std::vector<std::unique_ptr<EntropyEncoder>>& arithmeticEncoder,
   pcc::ringbuf<PCCOctree3Node>* nodesRemaining,
   const CloudFrame& refFrame,
   const SequenceParameterSet& sps,
   const InterGeomEncOpts& interParams,
-  const BiPredictionEncodeParams& biPredEncodeParams);
+  const BiPredictionEncodeParams& biPredEncodeParams,
+  DependentGeometryDataUnitHeader& dep_gbh,
+	GeometryGranularitySlicingParam& slicingParam,
+  PCCPointSet3* pointCloudOut
+);
+
+void encodeGeometryOctreeGranularitySlicing(
+	const OctreeEncOpts& opt,
+	const GeometryParameterSet& gps,
+	GeometryBrickHeader& gbh,
+	PCCPointSet3& pointCloud,
+	GeometryOctreeContexts& ctxtMem,
+	std::vector<std::unique_ptr<EntropyEncoder>>& arithmeticEncoder,
+	pcc::ringbuf<PCCOctree3Node>* nodesRemaining,
+	const CloudFrame& refFrame,
+	const SequenceParameterSet& sps,
+	const InterGeomEncOpts& interParams,
+	DependentGeometryDataUnitHeader& dep_gbh,
+	GeometryGranularitySlicingParam& slicingParam,
+  PCCPointSet3* pointCloudOut
+);
 
 void decodeGeometryOctree(
   const GeometryParameterSet& gps,
@@ -946,9 +976,20 @@ void decodeGeometryOctree(
   pcc::ringbuf<PCCOctree3Node>* nodesRemaining,
   const CloudFrame* refFrame,
   PCCPointSet3& predPointCloud2,
-  const Vec3<int> minimum_position
+  const Vec3<int> minimum_position,
+  GeometryGranularitySlicingParam& slicingParam);
 
-);
+void decodeGeometryOctreeGranularitySlicing(
+	const GeometryParameterSet& gps,
+	const GeometryBrickHeader& gbh,
+	PCCPointSet3& pointCloud,
+	GeometryOctreeContexts& ctxtMem,
+	EntropyDecoder& arithmeticDecoder,
+	pcc::ringbuf<PCCOctree3Node>* nodesRemaining,
+	GeometryGranularitySlicingParam& slicingParam);
+
+Vec3<int32_t> invQuantPosition(int qp, Vec3<uint32_t> quantMasks, const Vec3<int32_t>& pos);
+
 //----------------------------------------------------------------------------------
 void IsThetaPhiEligible(
   PCCOctree3Node& node,
@@ -1005,6 +1046,84 @@ canInterFrameEncodeDirectPosition(
 
   return DirectMode::kTwoPoints;
 }
+
+
+
+
+inline void lodSamplingForNode(
+  const PCCPointSet3& pointCloud,
+  PCCPointSet3& pointCloudOut,
+  const int targetIdx,
+  const int start,
+  const int end
+  ){
+          
+    std::vector<MortonCodeWithIndex> packedVoxel;
+    computeMortonCodesUnsorted(pointCloud, start, end, packedVoxel);
+    //if (!aps.canonical_point_order_flag) 
+    {
+      std::sort(packedVoxel.begin(), packedVoxel.end());
+    }
+
+    std::vector<uint32_t> retained, input;
+    int32_t pointCount = end - start;
+    retained.reserve(pointCount);
+    input.resize(pointCount);
+    for (uint32_t i = 0; i < pointCount; ++i) {
+      input[i] = i;
+    }
+          
+    std::vector<uint32_t> indexes;
+    indexes.resize(0);
+    indexes.reserve(pointCount);
+          
+    std::vector<uint32_t> numberOfPointsPerLevelOfDetail;
+    numberOfPointsPerLevelOfDetail.resize(0);
+    numberOfPointsPerLevelOfDetail.reserve(21);
+    numberOfPointsPerLevelOfDetail.push_back(pointCount);
+
+    int32_t maxNumDetailLevels = 21;
+    for (int32_t lodIndex = 0; !input.empty() && lodIndex < maxNumDetailLevels; ++lodIndex) {
+      if (lodIndex == maxNumDetailLevels - 1) {
+        for (const auto index : input) {
+          indexes.push_back(index);
+        }
+      } else {
+
+        int32_t octreeNodeSizeLog2 = lodIndex;
+
+        bool direction = octreeNodeSizeLog2 & 1;
+        subsampleByOctree(
+          pointCloud, packedVoxel, input, octreeNodeSizeLog2, retained, indexes,
+          direction);
+      }
+    
+      if (!retained.empty()) {
+        numberOfPointsPerLevelOfDetail.push_back(retained.size());
+      }
+      input.resize(0);
+      std::swap(retained, input);
+    }
+    std::reverse(indexes.begin(), indexes.end());
+    std::reverse(
+      numberOfPointsPerLevelOfDetail.begin(),
+      numberOfPointsPerLevelOfDetail.end());
+
+    //sampled index 
+    //int32_t idx = indexes[0] + start;
+    int32_t idx = packedVoxel[indexes[0]].index;
+		if (pointCloud.hasColors())
+			pointCloudOut.setColor(targetIdx, pointCloud.getColor(idx));
+		if (pointCloud.hasReflectances())
+			pointCloudOut.setReflectance(targetIdx, pointCloud.getReflectance(idx));
+
+    
+    std::cout << "id in sg: " << targetIdx  << ", ";
+    std::cout << "id in org: " << idx  << ", ";
+    std::cout << "color: " <<pointCloud.getColor(idx)  << ", ";
+    std::cout << std::endl;
+
+  }
 
 
 }  // namespace pcc

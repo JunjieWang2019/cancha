@@ -72,6 +72,7 @@ public:
   typedef T* pointer;
   typedef T& reference;
 
+  ring_iterator() {};
   //-------------------------------------------------------------------------
 
   explicit ring_iterator(T* base, size_t max, const iterator* start)

@@ -46,6 +46,7 @@ namespace pcc {
 
 //============================================================================
 
+
 void paddingToNodes(
   std::vector<PCCOctree3Node>& nodesPadded,
   std::vector<int>& indices,
@@ -82,6 +83,7 @@ void paddingToNodes(
   }
 }
 
+
 void
 encodeGeometryTrisoup(
   const TrisoupEncOpts& opt,
@@ -110,9 +112,12 @@ encodeGeometryTrisoup(
     paddingToNodes(nodesPadded, indices, pointCloudPadding, blockWidth);
   }
 
+  DependentGeometryDataUnitHeader dep_gbh;
+  GeometryGranularitySlicingParam slicingParam;
+
   encodeGeometryOctree(
     optOctree, gps, gbh, pointCloud, ctxtMemOctree, arithmeticEncoders, &nodes,
-    refFrame, sps, interParams, biPredEncodeParams);
+	  refFrame, sps, interParams, biPredEncodeParams, dep_gbh,slicingParam,nullptr);
 
   // resume encoding with the last encoder
   pcc::EntropyEncoder* arithmeticEncoder = arithmeticEncoders.back().get();

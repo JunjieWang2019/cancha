@@ -114,6 +114,13 @@ struct Parameters {
   bool sortInputByAzimuth;
 
   std::string motionVectorPath;
+
+  // layer-group slicing 
+  int sliceSelector;
+  bool roiEnabledFlag;
+  Vec3<double> roiPointScale;
+  Vec3<int> roiSize;
+  int numSkipLayerGroups;
 };
 
 //----------------------------------------------------------------------------
@@ -1583,7 +1590,77 @@ ParseParameters(int argc, char* argv[], Parameters& params)
   ("recolourMaxAttributeDist2Bwd",
     params.encoder.recolour.maxAttributeDist2Bwd, 1000.,
     "")
+      
+  (po::Section("Slicing"))
 
+	  // layer-group slicing parameters
+  ("layerGroupEnabledFlag",
+	  params.encoder.lgsp.layerGroupEnabledFlag, false,
+	  "Enables layer-group based slice")
+
+	  // layer-group structuring
+  ("numLayerGroupsMinus1", 
+	  params.encoder.lgsp.numLayerGroupsMinus1, 0,
+	  "Plus 1 is the number of layer-groups")
+
+  ("numLayersPerLayerGroup", 
+	  params.encoder.lgsp.numLayersPerLayerGroup, { 1, 1, 1, 1 },
+	  "The number of coding layers in the layer-groups.")
+
+	  // subgroup size
+  ("subgroupBboxSize_Cubic",
+	  params.encoder.lgsp.subgroupBboxSize_Cubic, 0,
+	  "Size of subgroup bounding box which have identical size for x-, y-, and z-axis. Used to support spatial random access at slice level.")
+
+  // For scalability and spatial random access
+  ("enableSliceSelector",
+	  params.sliceSelector, 0, 
+	  "Enable slice selector. 1 for encoder side, 2 for decoder side, 0 for disable")
+
+  ("roiEnabledFlag",
+    params.roiEnabledFlag, false, 
+	  "Enables ROI based slice selection after encoding")
+
+  ("bboxScaleForRoiPoint", 
+	  params.roiPointScale,  {0.0, 0.0, 0.0}, 
+	  "ROI position is calculated by multiplying the parameters (ranges 0 to 1) to the size of the bounding box in the x, y, and z-axis, represtively.")
+
+  ("roiSize", 
+	  params.roiSize,  {0, 0, 0}, 
+	  "")
+	  
+  ("numSkipLayerGroups",
+	  params.numSkipLayerGroups, 0, 
+	  "Number of skipped layer-group from the leaf. 0 represents decoding full depth. Used to support scalability at slice level.")
+
+  ("rootLayerGroupContextReferenceFlag",
+	  params.encoder.root_layer_group_context_ref_flag, false, 
+	  "")
+
+  ("depth1stSubgroupSearch",
+	  params.encoder.depth1stSubgroupSearch, true, 
+	  "")
+
+      
+  ("attributeContextReferenceIDPresentFlag",
+	  params.encoder.lgsp.attr_ctxt_ref_id_present_flag, false, 
+	  "")
+
+  ("qpCoefDependentUnits",
+    params.encoder.qpCoefDependentUnits, 0,
+      "Coef of qp offsets for each dependent attribute units")
+    
+  ("qpLayerCoefDependentUnits",
+    params.encoder.qpLayerCoefDependentUnits, 0,
+      "Coef of qp offsets for 1st layer of dependent attribute units")
+      
+  ("weightAdjustmentEnabledFlag",
+	  params.encoder.weight_adjustment_enabled_flag, false, 
+	  "")
+      
+  ("weightAdjustmentMethod",
+	  params.encoder.weight_adjustment_method, 0, 
+	  "0: LSM, 1: proposed by LGE")
   ;
   /* clang-format on */
 
@@ -1681,9 +1758,56 @@ ParseParameters(int argc, char* argv[], Parameters& params)
         codeAttrNum++;
       }
     }
+    po::dumpCfg(cout, opts, "Slicing", 4);
+
+    for (const auto& it : params.encoder.attributeIdxMap) {
+      // NB: when dumping the config, opts references params_attr
+      params_attr.desc = params.encoder.sps.attributeSets[it.second];
+      params_attr.aps = params.encoder.aps[it.second];
+      params_attr.encoder = params.encoder.attr[it.second];
+      cout << "    " << it.first << "\n";
+      po::dumpCfg(cout, opts, "Attributes", 8);
+    }
   }
 
   cout << endl;
+
+  if (params.sliceSelector == 1)			// encoder side slice selecton
+  {
+	  params.encoder.roiEnabledFlag = params.roiEnabledFlag;
+	  params.encoder.roiPointScale = params.roiPointScale;
+	  params.encoder.numSkipLayerGroups = params.numSkipLayerGroups;
+	  params.encoder.roiSize = params.roiSize;
+
+	  params.decoder.roiEnabledFlag = 0;
+	  params.decoder.roiPointScale = { 0, 0, 0 };
+	  params.decoder.numSkipLayerGroups = params.numSkipLayerGroups;			// Assume that the transcoder changes the num_layer_groups_minus1 in SPS.  
+	  params.decoder.roiSize = { 0, 0, 0 };
+  }
+  else if (params.sliceSelector == 2)		// decoder side slice selection
+  {
+	  params.decoder.roiEnabledFlag = params.roiEnabledFlag;
+	  params.decoder.roiPointScale = params.roiPointScale;
+	  params.decoder.numSkipLayerGroups = params.numSkipLayerGroups;
+	  params.decoder.roiSize = params.roiSize;
+
+	  params.encoder.roiEnabledFlag = 0;
+	  params.encoder.roiPointScale = { 0, 0, 0 };
+	  params.encoder.numSkipLayerGroups = 0;
+	  params.encoder.roiSize = { 0, 0, 0 };
+  }
+  else										// no slice selection
+  {
+	  params.encoder.roiEnabledFlag = 0;
+	  params.encoder.roiPointScale = { 0, 0, 0 };
+	  params.encoder.numSkipLayerGroups = 0;
+	  params.encoder.roiSize = { 0, 0, 0 };
+
+	  params.decoder.roiEnabledFlag = 0;
+	  params.decoder.roiPointScale = { 0, 0, 0 };
+	  params.decoder.numSkipLayerGroups = 0;
+	  params.decoder.roiSize = { 0, 0, 0 };
+  }
 
   return true;
 }
@@ -1854,6 +1978,16 @@ sanitizeEncoderOpts(
     params.encoder.sps.attributeSets.clear();
     params.encoder.aps.clear();
   }
+  
+  if(!params.encoder.lgsp.layerGroupEnabledFlag){
+    params.encoder.sps.layer_group_enabled_flag = false;
+  }else{
+    //params.encoder.gps.geom_octree_depth_planar_eligibiity_enabled_flag = false;
+  }
+  
+  if(!params.encoder.lgsp.layerGroupEnabledFlag){
+    params.encoder.sps.layer_group_enabled_flag = false;
+  }
 
   // fixup any per-attribute settings
   for (const auto& it : params.encoder.attributeIdxMap) {
@@ -1931,6 +2065,23 @@ sanitizeEncoderOpts(
       attr_aps.dist2 =
         std::max(0, int32_t(std::round(attr_aps.dist2 + delta)));
     }
+    
+    if(!params.encoder.lgsp.layerGroupEnabledFlag){
+      attr_aps.layer_group_enabled_flag = false;
+      params.encoder.qpCoefDependentUnits = 0;
+      params.encoder.qpLayerCoefDependentUnits = 0;
+    }else{
+      attr_aps.layer_group_enabled_flag = true;
+      attr_aps.spherical_coord_flag = false;
+
+      attr_aps.attr_ref_id_present_flag = params.encoder.lgsp.attr_ctxt_ref_id_present_flag;
+    }
+
+    if(attr_aps.layer_group_enabled_flag){
+      attr_aps.lod_decimation_type = LodDecimationMethod::kNone;
+      attr_aps.num_detail_levels_minus1 = 20;
+
+    }
 
     // derive samplingPeriod values based on initial value
     if (
@@ -1989,6 +2140,27 @@ sanitizeEncoderOpts(
       attr_aps.spherical_coord_flag = false;
     }
 
+    if (attr_aps.layer_group_enabled_flag) {
+      if (params.encoder.gps.qtbt_enabled_flag)
+        err.warn() << "QTBT is not supported in granularity attribute slicing\n";
+      params.encoder.gps.qtbt_enabled_flag = false;
+      
+      if (attr_aps.spherical_coord_flag)
+        err.warn() << "spherical coord is not supported in granularity attribute slicing\n";
+      attr_aps.spherical_coord_flag = false;
+
+      if(attr_aps.attrInterPredictionEnabled)
+        err.warn() << "inter pred is not supported in granularity attribute slicing\n";
+      attr_aps.attrInterPredictionEnabled = false;
+
+    }
+
+    if(params.encoder.qpCoefDependentUnits >0) {
+      if (!attr_aps.aps_slice_qp_deltas_present_flag)
+        err.warn() << "qpCoefDependentUnits > 0 requires aps_slice_qp_deltas_present_flag=1\n";
+    }
+
+    
     if (!params.encoder.gps.interPredictionEnabledFlag)
       attr_aps.attrInterPredictionEnabled = false;
   }

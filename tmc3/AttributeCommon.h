@@ -67,6 +67,9 @@ AttributeContexts::reset()
 }
 
 //============================================================================
+struct LayerGroupSlicingParams;
+
+//============================================================================
 
 struct AttributeLods {
   // Indicates if the generated LoDs are compatible with the provided aps
@@ -75,18 +78,57 @@ struct AttributeLods {
 
   bool empty() const { return numPointsInLod.empty(); };
 
-  void generate(
+  std::vector<uint32_t> generate(
     const AttributeParameterSet& aps,
     const AttributeBrickHeader& abh,
     int geom_num_points_minus1,
     int minGeomNodeSizeLog2,
-    const PCCPointSet3& cloud
-    , const AttributeInterPredParams& attrInterPredParams    
-    );
+    const PCCPointSet3& cloud,
+    const AttributeInterPredParams& attrInterPredParams,
+    int maxLevel = 0,
+    bool isGSUnit = false);
+
+  void generateLod(
+  const AttributeParameterSet& aps,
+  const AttributeBrickHeader& abh,
+  int geom_num_points_minus1,
+  int minGeomNodeSizeLog2,
+  const PCCPointSet3& cloud,
+  int maxLevel = 0);
+
+  //used only for weight_adjustment_method==1
+  //++++++++++++++++++++++++++++++++++++++++++++++
+  void generate_forFullLayerGroupSlicingEncoder(
+	  const AttributeParameterSet& aps,
+	  const AttributeBrickHeader& abh,
+	  int geom_num_points_minus1,
+	  int minGeomNodeSizeLog2,
+	  const PCCPointSet3& cloud,
+	  const AttributeInterPredParams& attrInterPredParams,
+	  //LayerGroupSlicingParams& layerGroupParams,
+	  //const int layerGroupIdx,
+	  //const int subgroupIdx,
+	  //int* tempPointCloudIdx)
+	  bool layerGroupEnabledFlag,
+	  int rootNodeSizeLog2,
+	  int rootNodeSizeLog2_coded,
+	  std::vector<std::vector<std::vector<uint32_t>>> dcmNodesIdx,
+	  std::vector<int> numLayersPerLayerGroup,
+	  std::vector<std::vector<Vec3<int>>> subgrpBboxOrigin,
+	  std::vector<std::vector<Vec3<int>>> subgrpBboxSize,
+	  std::vector<std::vector<int>> sliceSelectionIndicationFlag,
+	  std::vector<int>& numberOfPointsPerLodPerSubgroups);
+  //++++++++++++++++++++++++++++++++++++++++++++++
+
+  void predictFromParent(
+  const PCCPointSet3& cloud,
+  const PCCPointSet3& cloudParent);
 
   std::vector<PCCPredictor> predictors;
   std::vector<uint32_t> numPointsInLod;
   std::vector<uint32_t> indexes;
+
+  std::vector<int> numRefNodesInTheSameSubgroup;
 
   std::vector<uint32_t> indexesRef;
   std::vector<uint32_t> numPointsInLodRef;  

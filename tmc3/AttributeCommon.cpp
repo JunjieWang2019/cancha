@@ -42,25 +42,29 @@ namespace pcc {
 //============================================================================
 // AttributeLods methods
 
-void
+std::vector<uint32_t>
 AttributeLods::generate(
   const AttributeParameterSet& aps,
   const AttributeBrickHeader& abh,
   int geom_num_points_minus1,
   int minGeomNodeSizeLog2,
   const PCCPointSet3& cloud,
-  const AttributeInterPredParams& attrInterPredParams)
+  const AttributeInterPredParams& attrInterPredParams,
+  int maxLevel,
+  bool skipIntraInLastLevel)
 {
   _aps = aps;
   _abh = abh;
 
   if (minGeomNodeSizeLog2 > 0)
-    assert(aps.scalable_lifting_enabled_flag);
+    assert(aps.scalable_lifting_enabled_flag || aps.layer_group_enabled_flag);
 
-  buildPredictorsFast(
-    aps, abh, cloud, minGeomNodeSizeLog2, geom_num_points_minus1, predictors,
-    numPointsInLod, indexes, attrInterPredParams.enableAttrInterPred,
-    attrInterPredParams, numPointsInLodRef, indexesRef);
+  auto pointIndexToPredictorIndex = buildPredictorsFast(
+    aps, abh, cloud, minGeomNodeSizeLog2, geom_num_points_minus1, predictors,  
+    numPointsInLod, indexes,  
+    attrInterPredParams.enableAttrInterPred, attrInterPredParams,
+    numPointsInLodRef, indexesRef,
+    maxLevel, skipIntraInLastLevel);
 
   assert(predictors.size() == cloud.getPointCount());
   for (auto& predictor : predictors) {
@@ -68,8 +72,201 @@ AttributeLods::generate(
     if (aps.attr_encoding == AttributeEncoding::kPredictingTransform)
       if (aps.pred_weight_blending_enabled_flag)
         predictor.blendWeights(cloud, indexes, attrInterPredParams);
+
+
+  }
+
+  //uint32_t startIdx = 0;
+  //for (uint32_t lod=0; lod<numPointsInLod.size(); lod++) {
+  //  for (uint32_t i=startIdx; i<numPointsInLod[lod]; i++) {
+  //    auto predictor = predictors[i];
+  //  
+  //    std::cout << "lod: " << lod << ", pid: " << i << ", count: "<< predictor.neighborCount << ", ";
+  //    for(uint32_t n=0;n<predictor.neighborCount;n++)
+  //      std::cout << "neigh: " << n << ", id: " << predictor.neighbors[n].predictorIndex << ", ";
+  //    std:: cout << std::endl;
+
+  //  }
+  //  startIdx = numPointsInLod[lod];
+  //}
+
+  return pointIndexToPredictorIndex;
+}
+
+
+//----------------------------------------------------------------------------
+void
+AttributeLods::generateLod(
+  const AttributeParameterSet& aps,
+  const AttributeBrickHeader& abh,
+  int geom_num_points_minus1,
+  int minGeomNodeSizeLog2,
+  const PCCPointSet3& cloud,
+  int maxLevel)
+{
+  _aps = aps;
+  _abh = abh;
+
+  if (minGeomNodeSizeLog2 > 0)
+    assert(aps.scalable_lifting_enabled_flag || aps.layer_group_enabled_flag);
+
+  buildLodFast(
+    aps, abh, cloud, minGeomNodeSizeLog2, geom_num_points_minus1, predictors,
+    numPointsInLod, indexes,maxLevel);
+
+}
+
+
+//++++++++++++++++++++++++++++++++++++++++++++++
+
+void
+AttributeLods::generate_forFullLayerGroupSlicingEncoder(
+	const AttributeParameterSet& aps,
+	const AttributeBrickHeader& abh,
+	int geom_num_points_minus1,
+	int minGeomNodeSizeLog2,
+	const PCCPointSet3& cloud,
+	const AttributeInterPredParams& attrInterPredParams,
+	//LayerGroupSlicingParams& layerGroupParams,
+	//const int layerGroupIdx,
+	//const int subgroupIdx,
+	//int* tempPointCloudIdx)
+	bool layerGroupEnabledFlag,
+	int rootNodeSizeLog2,
+	int rootNodeSizeLog2_coded,
+	std::vector<std::vector<std::vector<uint32_t>>> dcmNodesIdx,
+	std::vector<int> numLayersPerLayerGroup,
+	std::vector<std::vector<Vec3<int>>> subgrpBboxOrigin,
+	std::vector<std::vector<Vec3<int>>> subgrpBboxSize,
+	std::vector<std::vector<int>> sliceSelectionIndicationFlag,
+	std::vector<int>& numberOfPointsPerLodPerSubgroups)
+{
+	_aps = aps;
+	_abh = abh;
+
+	if (minGeomNodeSizeLog2 > 0)
+		assert(aps.scalable_lifting_enabled_flag);
+
+	//if (layerGroupIdx >= 0 && subgroupIdx >= 0) {	// FGS decoder case
+	//	buildPredictorsFast(
+	//		aps, abh, cloud, minGeomNodeSizeLog2, geom_num_points_minus1, predictors,
+	//		numPointsInLod, indexes, attrInterPredParams.enableAttrInterPred,
+	//		attrInterPredParams, numPointsInLodRef, indexesRef,
+	//		layerGroupParams.layerGroupEnabledFlag,
+	//		layerGroupParams.rootNodeSizeLog2.max(),
+	//		layerGroupParams.rootNodeSizeLog2_coded.max(),
+	//		layerGroupParams.numLayersPerLayerGroup,
+	//		layerGroupParams.subgrpBboxOrigin,
+	//		layerGroupParams.subgrpBboxSize,
+	//		layerGroupParams.parentSubgroupId,
+	//		layerGroupIdx, subgroupIdx, tempPointCloudIdx,
+	//		&numRefNodesInTheSameSubgroup);
+	//}
+	//else {		// single slice case, FGS encoder case
+	
+		buildPredictorsFast_forFullLayerGroupSlicingEncoder(
+			aps, abh, cloud, minGeomNodeSizeLog2, geom_num_points_minus1, predictors,
+			numPointsInLod, indexes,
+			attrInterPredParams.enableAttrInterPred, attrInterPredParams,
+			numPointsInLodRef, indexesRef,
+			layerGroupEnabledFlag,
+			rootNodeSizeLog2,
+			rootNodeSizeLog2_coded,
+			dcmNodesIdx,
+			numLayersPerLayerGroup,
+			subgrpBboxOrigin,
+			subgrpBboxSize,
+			sliceSelectionIndicationFlag,
+			numberOfPointsPerLodPerSubgroups,
+			&numRefNodesInTheSameSubgroup);
+
+		for (int i = 0; i < dcmNodesIdx.size(); i++) {
+			for (int j = 0; j < dcmNodesIdx[i].size(); j++) {
+				dcmNodesIdx[i][j].clear();
+				dcmNodesIdx[i][j].shrink_to_fit();
+			}
+			dcmNodesIdx[i].clear();
+			dcmNodesIdx[i].shrink_to_fit();
+		}
+	//}
+
+	std::cout << "aps.pred_weight_blending_enabled_flag = " << aps.pred_weight_blending_enabled_flag << std::endl;
+
+	std::vector<int> accLayer;
+	if (layerGroupEnabledFlag) {
+		accLayer.resize(numLayersPerLayerGroup.size());
+		accLayer[0] = numLayersPerLayerGroup[0];
+		for (int i = 1; i < numLayersPerLayerGroup.size(); i++)
+			accLayer[i] = accLayer[i - 1] + numLayersPerLayerGroup[i];
+	}
+
+	assert(predictors.size() == cloud.getPointCount());
+	for (auto& predictor : predictors) {
+		predictor.computeWeights();
+
+		if (aps.attr_encoding == AttributeEncoding::kPredictingTransform) {
+			int shiftCurrent = 0;
+			int shiftParent = 0;
+			Vec3<int> bbox_min = { 0,0,0 }, bbox_max = { 2147483647,2147483647,2147483647 };
+
+			if (aps.pred_weight_blending_enabled_flag) {
+				if (layerGroupEnabledFlag) {
+					//if (layerGroupIdx < 0 || subgroupIdx < 0) {			// encoder.		
+						int curLayerGroup = predictor.curLayerGroup;
+						int curSubgroup = predictor.curSubgroup;
+
+						shiftCurrent = rootNodeSizeLog2 - accLayer[curLayerGroup];
+						if (curLayerGroup > 0)
+							shiftParent = rootNodeSizeLog2 - accLayer[curLayerGroup - 1];
+						else
+							shiftParent = shiftCurrent;
+
+						bbox_min = subgrpBboxOrigin[curLayerGroup][curSubgroup];
+						bbox_max = bbox_min + subgrpBboxSize[curLayerGroup][curSubgroup];
+					//}
+					//else {												// decoder
+					//	int curLayerGroup = layerGroupIdx;
+					//	int curSubgroup = subgroupIdx;
+
+					//	shiftCurrent = layerGroupParams.rootNodeSizeLog2.max() - accLayer[curLayerGroup];
+					//	if (curLayerGroup > 0)
+					//		shiftParent = layerGroupParams.rootNodeSizeLog2.max() - accLayer[curLayerGroup - 1];
+					//	else
+					//		shiftParent = shiftCurrent;
+
+					//	bbox_min = layerGroupParams.subgrpBboxOrigin[curLayerGroup][curSubgroup];
+					//	bbox_max = bbox_min + layerGroupParams.subgrpBboxSize[curLayerGroup][curSubgroup];
+					//}
+				}
+
+				predictor.blendWeights(cloud, indexes, attrInterPredParams
+					, shiftCurrent, shiftParent, bbox_min, bbox_max);
+			}
+		}
+	}
+}
+
+//++++++++++++++++++++++++++++++++++++++++++++++
+
+//----------------------------------------------------------------------------
+// 
+// set the points in the parent unit as the predictors at root level 
+void
+AttributeLods::predictFromParent(
+  const PCCPointSet3& cloud,
+  const PCCPointSet3& pointCloudParent)
+{
+
+  buildPredictorsFromParent(
+    _aps, cloud, predictors,
+    numPointsInLod[0], indexes, pointCloudParent);
+    
+  for (int i=0; i<numPointsInLod[0]; i++) {
+    predictors[i].computeWeights();
+    predictors[i].isPredFromParent = true;
   }
 }
+
 
 //----------------------------------------------------------------------------
 

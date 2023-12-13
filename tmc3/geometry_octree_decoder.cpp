@@ -255,7 +255,10 @@ public:
   // Octree extensions
   bool _angularExtension;
   ///< IDCM Coding
-  bool _angularDecideIDCMEligible;
+  bool _angularDecideIDCMEligible;  
+  
+  std::vector<std::vector<int>> _numSubsequentSubgroups;
+
 };
 
 //============================================================================
@@ -1557,16 +1560,17 @@ compensateGlobalMotion(
 
 void
 decodeGeometryOctree(
-  const GeometryParameterSet& gps,
-  const GeometryBrickHeader& gbh,
-  int skipLastLayers,
-  PCCPointSet3& pointCloud,
-  GeometryOctreeContexts& ctxtMem,
-  EntropyDecoder& arithmeticDecoder,
-  pcc::ringbuf<PCCOctree3Node>* nodesRemaining,
-  const CloudFrame* refFrame,
-  PCCPointSet3& predPointCloud2,
-  const Vec3<int> minimum_position
+	const GeometryParameterSet& gps,
+	const GeometryBrickHeader& gbh,
+	int skipLastLayers,
+	PCCPointSet3& pointCloud,
+	GeometryOctreeContexts& ctxtMem,
+	EntropyDecoder& arithmeticDecoder,
+	pcc::ringbuf<PCCOctree3Node>* nodesRemaining,
+	const CloudFrame* refFrame,
+	PCCPointSet3& predPointCloud2,
+	const Vec3<int> minimum_position,
+	GeometryGranularitySlicingParam& slicingParam
 )
 {
   const bool isInter = gbh.interPredictionEnabledFlag;
@@ -1586,26 +1590,9 @@ decodeGeometryOctree(
   size_t ringBufferSize = gbh.footer.geom_num_points_minus1 + 1;
   if (gbh.trisoupNodeSizeLog2(gps))
     ringBufferSize = 1100000;
-  pcc::ringbuf<PCCOctree3Node> fifo(ringBufferSize + 1);
+  pcc::ringbuf<PCCOctree3Node> fifo;
 
-  // push the first node
-  fifo.emplace_back();
-  PCCOctree3Node& node00 = fifo.back();
-  node00.start = uint32_t(0);
-  node00.end = uint32_t(0);
-  node00.pos = int32_t(0);
-  node00.predStart = uint32_t(0);
-  node00.predEnd = uint32_t(predPointCloud.getPointCount());
-  node00.numSiblingsMispredicted = 0;
   bool enableBiPred = gbh.biPredictionEnabledFlag;
-  node00.predStart2 = uint32_t(0);
-  node00.predEnd2 =
-    enableBiPred ? uint32_t(predPointCloud2.getPointCount()) : 0;
-  node00.predDir = 0;
-  node00.numSiblingsPlus1 = 8;
-  node00.siblingOccupancy = 0;
-  node00.qp = 0;
-  node00.idcmEligible = 0;
 
   size_t processedPointCount = 0;
   std::vector<uint32_t> values;
@@ -1686,36 +1673,97 @@ decodeGeometryOctree(
     }
   };
   PCCPointSet3 pointPredictorWorld;
-  if (isInter)
-    updatePredictorWorld(
-      pointPredictorWorld, predPointCloud, false, node00.predEnd);
-
   PCCPointSet3 pointPredictorWorld2;
-  if (isInter && enableBiPred) {
-    updatePredictorWorld(
-      pointPredictorWorld2, predPointCloud2, true, node00.predEnd2);
 
-    if (gps.frameMergeEnabledFlag) {
-      pointPredictorWorld.append(pointPredictorWorld2);
-      pointPredictorWorld2.clear();
-      enableBiPred = false;
+  if (slicingParam.startDepth > 0) {
+	  if (gps.geom_angular_mode_enabled_flag)
+		  decoder._phiBuffer = *slicingParam.buf.curPhiBuffer;
+	  if (gps.geom_planar_mode_enabled_flag)
+		  decoder._planar = *slicingParam.buf.curPlanar;
+  }
+  else if (slicingParam.startDepth == 0) {
+	  slicingParam.bboxMin = { 0, 0, 0 };
+	  slicingParam.bboxMax = { 1 << lvlNodeSizeLog2[0][0], 1 << lvlNodeSizeLog2[0][1], 1 << lvlNodeSizeLog2[0][2] };
+  }
 
-      node00.predEnd = pointPredictorWorld.getPointCount();
-      node00.predEnd2 = 0;
-    }
+  if (slicingParam.startDepth > 0) {
+	  ringBufferSize = slicingParam.numPointsInsubgroup;
+	  fifo = pcc::ringbuf<PCCOctree3Node>(ringBufferSize + 1);
+	  auto nodeSizeLog2 = lvlNodeSizeLog2[slicingParam.startDepth];
+	  int count = 0;
+	  for (auto nodeIt = slicingParam.buf.refNodes->begin(); nodeIt != slicingParam.buf.refNodes->end(); nodeIt++) {
+		  PCCOctree3Node& node0 = *(nodeIt);
+		  Vec3<int32_t> nodePos;
+		  for (int m = 0; m < 3; m++)
+			  nodePos[m] = node0.pos[m] << nodeSizeLog2[m];
+
+		  if ((nodePos.x() >= slicingParam.bboxMin.x() && nodePos.x() < slicingParam.bboxMax.x()
+			  && nodePos.y() >= slicingParam.bboxMin.y() && nodePos.y() < slicingParam.bboxMax.y()
+			  && nodePos.z() >= slicingParam.bboxMin.z() && nodePos.z() < slicingParam.bboxMax.z())) {
+
+			  fifo.emplace_back(node0);
+			  count++;
+		  }
+		  else
+			  continue;
+	  }
+  }
+  else {
+	  fifo = pcc::ringbuf<PCCOctree3Node>(ringBufferSize + 1);
+
+	  //// push the first node
+	  fifo.emplace_back();
+	  PCCOctree3Node& node00 = fifo.back();
+	  node00.start = uint32_t(0);
+	  node00.end = uint32_t(0);
+	  node00.pos = int32_t(0);
+	  node00.predStart = uint32_t(0);
+	  node00.predEnd = uint32_t(predPointCloud.getPointCount());
+	  node00.numSiblingsMispredicted = 0;
+	  node00.predStart2 = uint32_t(0);
+	  node00.predEnd2 =
+		  enableBiPred ? uint32_t(predPointCloud2.getPointCount()) : 0;
+	  node00.predDir = 0;
+	  node00.numSiblingsPlus1 = 8;
+	  node00.siblingOccupancy = 0;
+	  node00.qp = 0;
+	  node00.idcmEligible = 0;
+
+	  if (isInter)
+		  updatePredictorWorld(
+			  pointPredictorWorld, predPointCloud, false, node00.predEnd);
+
+	  PCCPointSet3 pointPredictorWorld2;
+	  if (isInter && enableBiPred) {
+		  updatePredictorWorld(
+			  pointPredictorWorld2, predPointCloud2, true, node00.predEnd2);
+
+		  if (gps.frameMergeEnabledFlag) {
+			  pointPredictorWorld.append(pointPredictorWorld2);
+			  pointPredictorWorld2.clear();
+			  enableBiPred = false;
+
+			  node00.predEnd = pointPredictorWorld.getPointCount();
+			  node00.predEnd2 = 0;
+		  }
+	  }
   }
 
   // The number of nodes to wait before updating the planar rate.
   // This is to match the prior behaviour where planar is updated once
   // per coded occupancy.
   int nodesBeforePlanarUpdate = 1;
+  if (slicingParam.startDepth > 0) {
+	  nodesBeforePlanarUpdate = slicingParam.nodesBeforePlanarUpdate;
+  }
 
   const bool planarEligibilityDynamicOBUF =
     gps.geom_planar_mode_enabled_flag
     && gps.geom_octree_planar_dynamic_obuf_eligibiity_enabled_flag
     && !gps.geom_angular_mode_enabled_flag;
 
-  decoder.resetMap(isInter, planarEligibilityDynamicOBUF);
+  if (!slicingParam.layer_group_enabled_flag || slicingParam.startDepth == 0)
+	decoder.resetMap(isInter, planarEligibilityDynamicOBUF);
 
   bool planarEligibleKOctreeDepth = 0;
   int numPointsCodedByIdcm = 0;
@@ -1725,6 +1773,12 @@ decodeGeometryOctree(
     && !gps.geom_angular_mode_enabled_flag;
 
   for (int depth = 0; depth < maxDepth; depth++) {
+	if (depth < slicingParam.startDepth || (slicingParam.endDepth && depth >= slicingParam.endDepth))
+		continue;
+
+	if (slicingParam.layer_group_enabled_flag && checkPlanarEligibilityBasedOnOctreeDepth)
+		planarEligibleKOctreeDepth = (slicingParam.buf.planarEligibleKOctreeDepth_perLayer)[depth - slicingParam.startDepth];
+
     int numSubnodes = 0;
     // setup at the start of each level
     auto fifoCurrLvlEnd = fifo.end();
@@ -1748,6 +1802,7 @@ decodeGeometryOctree(
     // Determine if this is the level where node QPs are sent
     bool nodeQpOffsetsPresent =
       !nodeQpOffsetsSignalled && decoder.decodeNodeQpOffsetsPresent();
+	if (slicingParam.layer_group_enabled_flag && !slicingParam.startDepth)
 
     // record the node size when quantisation is signalled -- all subsequnt
     // coded occupancy bits are quantised
@@ -1805,6 +1860,8 @@ decodeGeometryOctree(
       bool enabledPred = isInter && (enableBiPred || !node0.predDir);
       // inter prediction from the second reference frame is enabled
       bool enabledPred2 = isInter && (enableBiPred || node0.predDir);
+
+	  bool bboxChangedFlag = false;
 
       // sort the predictor into eight child partitions
       //  - perform an 8-way counting sort of the current node's points
@@ -1893,9 +1950,14 @@ decodeGeometryOctree(
       posInParent &= codedAxesPrevLvl;
 
       if (gps.neighbour_avail_boundary_log2_minus1) {
-        updateGeometryOccupancyAtlas(
-          node0.pos, codedAxesPrevLvl, fifo, fifoCurrLvlEnd, &occupancyAtlas,
-          &occupancyAtlasOrigin);
+		  if (slicingParam.layer_group_enabled_flag)
+			  updateGeometryOccupancyAtlas(
+				  node0.pos, codedAxesPrevLvl, fifo, fifoCurrLvlEnd, &occupancyAtlas,
+				  &occupancyAtlasOrigin, slicingParam.bboxMin, slicingParam.bboxMax, nodeSizeLog2, bboxChangedFlag);
+		  else
+			updateGeometryOccupancyAtlas(
+			  node0.pos, codedAxesPrevLvl, fifo, fifoCurrLvlEnd, &occupancyAtlas,
+			  &occupancyAtlasOrigin);
 
         gnp = makeGeometryNeighPattern(
           gps.adjacent_child_contextualization_enabled_flag,
@@ -2188,34 +2250,56 @@ decodeGeometryOctree(
         numNodesNextLvl++;
       }
     }
-    if (checkPlanarEligibilityBasedOnOctreeDepth)
-      planarEligibleKOctreeDepth =
-        (ringBufferSize - numPointsCodedByIdcm) * 10 < numSubnodes * 13;
+    if (checkPlanarEligibilityBasedOnOctreeDepth) {
+		if (!slicingParam.layer_group_enabled_flag) {
+			assert(ringBufferSize * 10 < 0xffffffff);
+			planarEligibleKOctreeDepth =
+				(uint32_t)(ringBufferSize - numPointsCodedByIdcm) * 10 < (uint32_t)numSubnodes * 13;
+		}
+	}
 
     // Check that one level hasn't produced too many nodes
     // todo(df): this check is too weak to spot overflowing the fifo
     assert(numNodesNextLvl <= ringBufferSize);
   }
 
-  decoder.clearMap(isInter,planarEligibilityDynamicOBUF);
+  if (!slicingParam.layer_group_enabled_flag)
+	decoder.clearMap(isInter,planarEligibilityDynamicOBUF);
 
   // save the context state for re-use by a future slice if required
   ctxtMem = decoder.getCtx();
+
+  if (slicingParam.layer_group_enabled_flag)
+	  decoder.clearMap(isInter, planarEligibilityDynamicOBUF);
 
   // NB: the point cloud needs to be resized if partially decoded
   // OR: if geometry quantisation has changed the number of points
   pointCloud.resize(processedPointCount);
 
-  // return partial coding result
-  //  - add missing levels to node positions and inverse quantise
-  if (nodesRemaining) {
-    auto nodeSizeLog2 = lvlNodeSizeLog2[maxDepth];
-    for (auto& node : fifo) {
-      node.pos <<= nodeSizeLog2 - QuantizerGeom::qpShift(node.qp);
-      node.pos = invQuantPosition(node.qp, posQuantBitMasks, node.pos);
-    }
-    *nodesRemaining = std::move(fifo);
-    return;
+  if (slicingParam.layer_group_enabled_flag) {
+    slicingParam.posQuantBitMasksLastLayer = posQuantBitMasks;
+
+	  *nodesRemaining = std::move(fifo);
+
+	  if (gps.geom_angular_mode_enabled_flag)
+		  *slicingParam.buf.curPhiBuffer = decoder._phiBuffer;
+	  if (gps.geom_planar_mode_enabled_flag)
+		  *slicingParam.buf.curPlanar = decoder._planar;
+    
+    slicingParam.nodesBeforePlanarUpdate = nodesBeforePlanarUpdate;
+  }
+  else {
+	  // return partial coding result
+	  //  - add missing levels to node positions and inverse quantise
+	  if (nodesRemaining) {
+		  auto nodeSizeLog2 = lvlNodeSizeLog2[maxDepth];
+		  for (auto& node : fifo) {
+			  node.pos <<= nodeSizeLog2 - QuantizerGeom::qpShift(node.qp);
+			  node.pos = invQuantPosition(node.qp, posQuantBitMasks, node.pos);
+		  }
+		  *nodesRemaining = std::move(fifo);
+		  return;
+	  }
   }
 }
 
@@ -2233,9 +2317,11 @@ decodeGeometryOctree(
   const Vec3<int> minimum_position
 )
 {
+  GeometryGranularitySlicingParam slicingParam;
+
   decodeGeometryOctree(
     gps, gbh, 0, pointCloud, ctxtMem, arithmeticDecoder, nullptr, refFrame,
-    predPointCloud2, minimum_position);
+    predPointCloud2, minimum_position, slicingParam);
 }
 
 //-------------------------------------------------------------------------
@@ -2252,9 +2338,11 @@ decodeGeometryOctreeScalable(
   PCCPointSet3& predPointCloud2)
 {
   pcc::ringbuf<PCCOctree3Node> nodes;
+  GeometryGranularitySlicingParam slicingParam;
+
   decodeGeometryOctree(
     gps, gbh, minGeomNodeSizeLog2, pointCloud, ctxtMem, arithmeticDecoder,
-    &nodes, refFrame, predPointCloud2, {0, 0, 0});
+    &nodes, refFrame, predPointCloud2, {0, 0, 0}, slicingParam);
 
   if (minGeomNodeSizeLog2 > 0) {
     size_t size =
@@ -2277,6 +2365,68 @@ decodeGeometryOctreeScalable(
     }
   }
 }
+
+//-------------------------------------------------------------------------
+
+void
+decodeGeometryOctreeGranularitySlicing(
+	const GeometryParameterSet& gps,
+	const GeometryBrickHeader& gbh,
+	PCCPointSet3& pointCloud,
+	GeometryOctreeContexts& ctxtMem,
+	EntropyDecoder& arithmeticDecoder,
+	pcc::ringbuf<PCCOctree3Node>* nodesRemaining,
+	GeometryGranularitySlicingParam& slicingParam)
+{
+	//avoid crach in debug mode
+	CloudFrame refFrame;
+	Vec3<int> minimum_position;
+	PCCPointSet3 predPointCloud2;
+
+
+	decodeGeometryOctree(
+		gps, gbh, 0, pointCloud, ctxtMem, arithmeticDecoder, nodesRemaining,
+		&refFrame, predPointCloud2, minimum_position, slicingParam);
+
+	//if (isOutputLayerGroup) 
+  {
+		int maxDepth = gbh.tree_lvl_coded_axis_list.size();
+		int minGeomNodeSizeLog2 = maxDepth - slicingParam.endDepth;
+
+		if (minGeomNodeSizeLog2 > 0) {
+			//size_t numDcmPoints =
+			//	pointCloud.removeDuplicatePointInQuantizedPoint(minGeomNodeSizeLog2);
+			size_t size =
+				pointCloud.getPointCount();
+      slicingParam.numDCMPointsSubgroup = size;
+      
+			pointCloud.resize(size + nodesRemaining->size());
+			size_t processedPointCount = size;
+
+			if (minGeomNodeSizeLog2 > 1) {
+				uint32_t mask = uint32_t(-1) << minGeomNodeSizeLog2;
+				for (auto node0 : *nodesRemaining) {
+
+			    node0.pos <<= minGeomNodeSizeLog2 - QuantizerGeom::qpShift(node0.qp);
+			    node0.pos = invQuantPosition(node0.qp, slicingParam.posQuantBitMasksLastLayer, node0.pos);
+
+					for (int k = 0; k < 3; k++)
+						node0.pos[k] &= mask;
+					node0.pos += 1 << (minGeomNodeSizeLog2 - 1);
+					pointCloud[processedPointCount++] = node0.pos;
+				}
+			}
+			else {
+				for (auto node0 : *nodesRemaining){
+			        node0.pos <<= minGeomNodeSizeLog2 - QuantizerGeom::qpShift(node0.qp);
+			        node0.pos = invQuantPosition(node0.qp, slicingParam.posQuantBitMasksLastLayer, node0.pos);
+					pointCloud[processedPointCount++] = node0.pos;
+        }
+			}
+		}
+	}
+}
+
 
 //============================================================================
 

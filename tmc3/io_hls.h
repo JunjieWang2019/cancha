@@ -141,6 +141,40 @@ AttributeBrickHeader parseAbhIds(const PayloadBuffer& buf);
 
 //----------------------------------------------------------------------------
 
+void write(
+	const SequenceParameterSet& sps,
+	const GeometryParameterSet& gps,
+	const DependentGeometryDataUnitHeader& dep_gbh,
+	PayloadBuffer* buf);
+
+DependentGeometryDataUnitHeader parseDepGbh(
+	const SequenceParameterSet& sps,
+	const GeometryParameterSet& gps,
+	GeometryBrickHeader gbh,
+	const PayloadBuffer& buf,
+	int* bytesReadHead,
+	int* bytesReadFoot);
+
+DependentGeometryDataUnitHeader parseDepGbhIds(const PayloadBuffer& buf);
+void write(
+	const SequenceParameterSet& sps,
+  const AttributeParameterSet& aps,
+	const DependentAttributeDataUnitHeader& dep_abh,
+	PayloadBuffer* buf);
+
+DependentAttributeDataUnitHeader parseDepAbh(
+  const SequenceParameterSet& sps,
+  const AttributeParameterSet& aps,
+  const PayloadBuffer& buf,
+  int* bytesRead);
+
+DependentAttributeDataUnitHeader parseDepAbhIds(const PayloadBuffer& buf);
+
+PayloadBuffer write(
+	const SequenceParameterSet& sps, const LayerGroupStructureInventory& inventory);
+
+LayerGroupStructureInventory parseLayerGroupStructureInventory(const PayloadBuffer& buf);
+
 //============================================================================
 
 }  // namespace pcc
