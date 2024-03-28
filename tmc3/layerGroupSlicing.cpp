@@ -1243,6 +1243,7 @@ namespace pcc {
     
 		int group_id = getLayerGroupIds(curArrayIdx).layerGroupID;
 		int subgroup_id = getLayerGroupIds(curArrayIdx).subgroupID;
+		PCCPointSet3 null;
 
   	if (isOutputLayer(group_id)) {
 			return getPoints(hasColour, hasReflectance, subgroupPointCloud);
@@ -1251,6 +1252,7 @@ namespace pcc {
 
 			return getDCMPoints(hasColour, hasReflectance, curArrayIdx, subgroupPointCloud);
     }
+    return null;
   }
 
   void LayerGroupHandler::countExcludedPoints(const int curArrayIdx, LayerGroupSlicingParams& layerGroupParams, PCCPointSet3& subgroupPointCloud){
@@ -1743,6 +1745,7 @@ int splitOneDirection(std::vector<Vec3<int>>& splitBboxOrigin, std::vector<Vec3<
 		splitSubgroup(splitBboxOrigin, splitBboxSize, splitNumPoints, splitSubgroupPointCloud[mask],
 			subOrigin, subSize, maxNumPoint);
 	}
+	return -1;
 }
 
 void splitSubgroup(std::vector<Vec3<int>>& splitBboxOrigin, std::vector<Vec3<int>>& splitBboxSize, std::vector<int>& splitNumPoints, const std::vector<Vec3<int>> subgrpPointCloud,
