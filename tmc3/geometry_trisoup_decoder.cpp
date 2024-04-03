@@ -129,7 +129,9 @@ decodeGeometryTrisoup(
   GeometryOctreeContexts& ctxtMemOctree,
   EntropyDecoder& arithmeticDecoder,
   const CloudFrame* refFrame,
-  const Vec3<int> minimum_position)
+  const Vec3<int> minimum_position,
+  PCCPointSet3& compensatedPointCloud,
+  PCCPointSet3& compensatedPointCloud2)
 {
   // trisoup uses octree coding until reaching the triangulation level.
   // todo(df): pass trisoup node size rather than 0?
@@ -140,7 +142,7 @@ decodeGeometryTrisoup(
 
   decodeGeometryOctree(
     gps, gbh, 0, pointCloud, ctxtMemOctree, arithmeticDecoder, &nodes,
-	  refFrame, predPointCloud2, minimum_position, slicingParam);
+	  refFrame, predPointCloud2, compensatedPointCloud,compensatedPointCloud2, minimum_position, slicingParam);
 
   int blockWidth = 1 << gbh.trisoupNodeSizeLog2(gps);
   const int maxVertexPrecisionLog2 = gbh.trisoup_vertex_quantization_bits ? gbh.trisoup_vertex_quantization_bits : gbh.trisoupNodeSizeLog2(gps);

@@ -944,7 +944,8 @@ void encodeGeometryOctree(
   const CloudFrame& refFrame,
   const SequenceParameterSet& sps,
   const InterGeomEncOpts& interParams,
-  const BiPredictionEncodeParams& biPredEncodeParams,
+  PCCPointSet3& compensatedPointCloud,
+  BiPredictionEncodeParams& biPredEncodeParams,
   DependentGeometryDataUnitHeader& dep_gbh,
 	GeometryGranularitySlicingParam& slicingParam,
   PCCPointSet3* pointCloudOut
@@ -976,6 +977,8 @@ void decodeGeometryOctree(
   pcc::ringbuf<PCCOctree3Node>* nodesRemaining,
   const CloudFrame* refFrame,
   PCCPointSet3& predPointCloud2,
+  PCCPointSet3& compensatedPointCloud,
+  PCCPointSet3& compensatedPointCloud2,
   const Vec3<int> minimum_position,
   GeometryGranularitySlicingParam& slicingParam);
 

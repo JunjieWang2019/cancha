@@ -1569,6 +1569,8 @@ decodeGeometryOctree(
 	pcc::ringbuf<PCCOctree3Node>* nodesRemaining,
 	const CloudFrame* refFrame,
 	PCCPointSet3& predPointCloud2,
+  PCCPointSet3& compensatedPointCloud,
+  PCCPointSet3& compensatedPointCloud2,
 	const Vec3<int> minimum_position,
 	GeometryGranularitySlicingParam& slicingParam
 )
@@ -1668,9 +1670,6 @@ decodeGeometryOctree(
         gps, gbh, cloud, predictorCloud, &arithmeticDecoder, minPos, dir);
     }
     predEnd = uint32_t(predictorCloud.getPointCount());
-    for (int i = 0; i < predEnd; i++) {
-      predictorCloud[i] -= gbh.geomBoxOrigin;
-    }
   };
   PCCPointSet3 pointPredictorWorld;
   PCCPointSet3 pointPredictorWorld2;
@@ -1729,14 +1728,23 @@ decodeGeometryOctree(
 	  node00.qp = 0;
 	  node00.idcmEligible = 0;
 
-	  if (isInter)
-		  updatePredictorWorld(
-			  pointPredictorWorld, predPointCloud, false, node00.predEnd);
+    if (isInter) {
+      updatePredictorWorld(
+        pointPredictorWorld, predPointCloud, false, node00.predEnd);
+      compensatedPointCloud = pointPredictorWorld;
+      for (int i = 0; i < node00.predEnd; i++) {
+        pointPredictorWorld[i] -= gbh.geomBoxOrigin;
+      }
+    }  
 
-	  PCCPointSet3 pointPredictorWorld2;
 	  if (isInter && enableBiPred) {
 		  updatePredictorWorld(
 			  pointPredictorWorld2, predPointCloud2, true, node00.predEnd2);
+
+      compensatedPointCloud2 = pointPredictorWorld;
+      for (int i = 0; i < node00.predEnd2; i++) {
+        pointPredictorWorld2[i] -= gbh.geomBoxOrigin;
+      }    
 
 		  if (gps.frameMergeEnabledFlag) {
 			  pointPredictorWorld.append(pointPredictorWorld2);
@@ -2314,6 +2322,8 @@ decodeGeometryOctree(
   EntropyDecoder& arithmeticDecoder,
   const CloudFrame* refFrame,
   PCCPointSet3& predPointCloud2,
+  PCCPointSet3& compensatedPointCloud,
+  PCCPointSet3& compensatedPointCloud2,
   const Vec3<int> minimum_position
 )
 {
@@ -2321,7 +2331,7 @@ decodeGeometryOctree(
 
   decodeGeometryOctree(
     gps, gbh, 0, pointCloud, ctxtMem, arithmeticDecoder, nullptr, refFrame,
-    predPointCloud2, minimum_position, slicingParam);
+    predPointCloud2, compensatedPointCloud, compensatedPointCloud2, minimum_position, slicingParam);
 }
 
 //-------------------------------------------------------------------------
@@ -2335,14 +2345,16 @@ decodeGeometryOctreeScalable(
   GeometryOctreeContexts& ctxtMem,
   EntropyDecoder& arithmeticDecoder,
   const CloudFrame* refFrame,
-  PCCPointSet3& predPointCloud2)
+  PCCPointSet3& predPointCloud2,
+  PCCPointSet3& compensatedPointCloud,
+  PCCPointSet3& compensatedPointCloud2)
 {
   pcc::ringbuf<PCCOctree3Node> nodes;
   GeometryGranularitySlicingParam slicingParam;
 
   decodeGeometryOctree(
     gps, gbh, minGeomNodeSizeLog2, pointCloud, ctxtMem, arithmeticDecoder,
-    &nodes, refFrame, predPointCloud2, {0, 0, 0}, slicingParam);
+    &nodes, refFrame, predPointCloud2, compensatedPointCloud, compensatedPointCloud2, {0, 0, 0}, slicingParam);
 
   if (minGeomNodeSizeLog2 > 0) {
     size_t size =
@@ -2382,11 +2394,13 @@ decodeGeometryOctreeGranularitySlicing(
 	CloudFrame refFrame;
 	Vec3<int> minimum_position;
 	PCCPointSet3 predPointCloud2;
+  PCCPointSet3 compensatedPointCloud;
+  PCCPointSet3 compensatedPointCloud2;
 
 
 	decodeGeometryOctree(
 		gps, gbh, 0, pointCloud, ctxtMem, arithmeticDecoder, nodesRemaining,
-		&refFrame, predPointCloud2, minimum_position, slicingParam);
+		&refFrame, predPointCloud2, compensatedPointCloud, compensatedPointCloud2, minimum_position, slicingParam);
 
 	//if (isOutputLayerGroup) 
   {

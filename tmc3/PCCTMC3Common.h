@@ -336,10 +336,10 @@ struct AttributeInterPredParams {
   PCCPointSet3* refIndexCloud = nullptr;
   bool useRefCloudIndex = false;
   std::vector<int> refPointCloudIndices;
+  PCCPointSet3 compensatedPointCloud;
   int frameDistance;
   bool enableAttrInterPred;
   bool attrInterIntraSliceRDO;
-  bool enableSkipCode = true;
   double lambda;
   int rateEstimate;
   double distEstimate;
@@ -397,6 +397,8 @@ struct BiPredictionEncodeParams {
   // geometry occupancy
   PCCPointSet3 predPointCloud2;
 
+  PCCPointSet3 compensatedPointCloud2;
+
   // The information of Point cloud that acts as the second predictor of the current point cloud's
   // attribute information
   AttributeInterPredParams attrInterPredParams2;
@@ -420,7 +422,7 @@ struct BiPredictionDecodeParams {
   // Point cloud that acts as the second predictor of the current point cloud's
   // geometry occupancy
   PCCPointSet3 refPointCloud2;
-
+  PCCPointSet3 compensatedPointCloud2;
   // The information of Point cloud that acts as the second predictor
   // of the current point cloud's attribute information
   AttributeInterPredParams attrInterPredParams2;

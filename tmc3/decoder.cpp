@@ -813,19 +813,19 @@ PCCTMC3Decoder3::decodeGeometryBrick(const PayloadBuffer& buf)
 
 		}
 		else
-		  decodeGeometryOctree(
-			*_gps, _gbh, _currentPointCloud, *_ctxtMemOctreeGeom, aec, _refFrame,
-			biPredDecodeParams.refPointCloud2, _sps->seqBoundingBoxOrigin);
+      decodeGeometryOctree(
+        *_gps, _gbh, _currentPointCloud, *_ctxtMemOctreeGeom, aec, _refFrame,
+        biPredDecodeParams.refPointCloud2, attrInterPredParams.compensatedPointCloud, biPredDecodeParams.compensatedPointCloud2, _sps->seqBoundingBoxOrigin);
     } else {
       decodeGeometryOctreeScalable(
         *_gps, _gbh, _params.minGeomNodeSizeLog2, _currentPointCloud,
         *_ctxtMemOctreeGeom, aec, _refFrame,
-        biPredDecodeParams.refPointCloud2);
+        biPredDecodeParams.refPointCloud2, attrInterPredParams.compensatedPointCloud, biPredDecodeParams.compensatedPointCloud2);
     }
   } else {
     decodeGeometryTrisoup(
       *_gps, _gbh, _currentPointCloud, *_ctxtMemOctreeGeom, aec,
-      _refFrame, _sps->seqBoundingBoxOrigin);
+      _refFrame, _sps->seqBoundingBoxOrigin, attrInterPredParams.compensatedPointCloud, biPredDecodeParams.compensatedPointCloud2);
   }
 
   bool currFrameNotCodedAsB = (_gps->biPredictionEnabledFlag) && !_gbh.biPredictionEnabledFlag;
@@ -1051,6 +1051,17 @@ PCCTMC3Decoder3::decodeAttributeBrick(const PayloadBuffer& buf)
       _gps->biPredictionEnabledFlag && attr_aps.attrInterPredictionEnabled
       && !abh.disableAttrInterPredForRefFrame2;
 
+    if (!attr_aps.spherical_coord_flag) {
+      if (attrInterPredParams.enableAttrInterPred)
+        attrInterPredParams.referencePointCloud = attrInterPredParams.compensatedPointCloud;
+      if (_gps->biPredictionEnabledFlag)
+        if (_gbh.biPredictionEnabledFlag
+          && biPredDecodeParams.attrInterPredParams2.enableAttrInterPred)
+          biPredDecodeParams.attrInterPredParams2.referencePointCloud = biPredDecodeParams.compensatedPointCloud2;
+    }
+
+
+
   if (_gps->biPredictionEnabledFlag) {
       //FrameMerge for attribute inter prediction
     if (
@@ -1082,14 +1093,10 @@ PCCTMC3Decoder3::decodeAttributeBrick(const PayloadBuffer& buf)
   attrInterPredParams.paramsForInterRAHT.raht_enable_inter_intra_layer_RDO =
     attr_aps.raht_enable_code_layer;
   attrInterPredParams.attr_layer_code_mode = abh.raht_attr_layer_code_mode;
-  if (attr_sps.attr_num_dimensions_minus1 == 0 && !_gps->geom_angular_mode_enabled_flag)
-    attrInterPredParams.enableSkipCode = false;
-  else
-    attrInterPredParams.enableSkipCode = true;
   
   if (attr_aps.spherical_coord_flag && _gps->predgeom_enabled_flag && !_gps->biPredictionEnabledFlag)
     attrInterPredParams.useRefCloudIndex = true;
-
+  
   pcc::chrono::Stopwatch<pcc::chrono::utime_inc_children_clock> clock_user;
 
   int curArrayIdx = 0;
@@ -1248,7 +1255,7 @@ PCCTMC3Decoder3::decodeAttributeBrick(const PayloadBuffer& buf)
           }
           indices.resize(ctr);
         } else {
-          attrInterPredParams.referencePointCloud = _refFrameAlt->cloud;
+          //attrInterPredParams.referencePointCloud = _refFrameAlt->cloud;
           int count = 0;
           auto& cloudTmp = attrInterPredParams.referencePointCloud;
           for (int i = 0; i < attrInterPredParams.getPointCount(); i++) {

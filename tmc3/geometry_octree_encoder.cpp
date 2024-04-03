@@ -1861,7 +1861,8 @@ encodeGeometryOctree(
   pcc::ringbuf<PCCOctree3Node>* nodesRemaining,
   const CloudFrame& refFrame,
   const SequenceParameterSet& sps, const InterGeomEncOpts& interParams,
-  const BiPredictionEncodeParams& biPredEncodeParams,
+  PCCPointSet3& compensatedPointCloud,
+  BiPredictionEncodeParams& biPredEncodeParams,
   DependentGeometryDataUnitHeader& dep_gbh,
   GeometryGranularitySlicingParam& slicingParam,
   PCCPointSet3* pointCloudOut
@@ -1888,7 +1889,8 @@ encodeGeometryOctree(
         interParams, sps, gps, gbh, pointCloud, predPointCloud,
         pointPredictorWorld, arithmeticEncoderIt->get(), 0, biPredEncodeParams);
     }
-
+    ///<accoding to the matrix to get the compensated reference point cloud
+    compensatedPointCloud = pointPredictorWorld;
     for (int i = 0; i < pointPredictorWorld.getPointCount(); i++) {
       pointPredictorWorld[i] -= gbh.geomBoxOrigin;
     }
@@ -1907,7 +1909,7 @@ encodeGeometryOctree(
         pointPredictorWorld2, arithmeticEncoderIt->get(), 1,
         biPredEncodeParams);
     }
-
+    biPredEncodeParams.compensatedPointCloud2 = pointPredictorWorld2;
     for (int i = 0; i < pointPredictorWorld2.getPointCount(); i++) {
       pointPredictorWorld2[i] -= gbh.geomBoxOrigin;
     }
@@ -2852,7 +2854,8 @@ encodeGeometryOctree(
   const CloudFrame& refFrame,
   const SequenceParameterSet& sps,
   const InterGeomEncOpts& interParams,
-  const BiPredictionEncodeParams& biPredEncodeParams)
+  PCCPointSet3& compensatedPointCloud,
+  BiPredictionEncodeParams& biPredEncodeParams)
 {
   Vec3<int> bbox_min, bbox_max;
   Vec3<uint32_t> posQuantBitMasksLastLayer;
@@ -2862,7 +2865,7 @@ encodeGeometryOctree(
 
   encodeGeometryOctree(
     opt, gps, gbh, pointCloud, ctxtMem, arithmeticEncoders, nullptr, refFrame,
-    sps, interParams, biPredEncodeParams, dep_gbh, slicingParam, nullptr);
+    sps, interParams,compensatedPointCloud, biPredEncodeParams, dep_gbh, slicingParam, nullptr);
 }
 
 void
@@ -2884,11 +2887,13 @@ encodeGeometryOctreeGranularitySlicing(
   Vec3<uint32_t> posQuantBitMasksLastLayer = 0xffffffff;
 
   BiPredictionEncodeParams biPredEncodeParams;	
+  PCCPointSet3 compensatedPointCloud;
+
   assert(pointCloudOut);
     
   encodeGeometryOctree(
     opt, gps, gbh, pointCloud, ctxtMem, arithmeticEncoders, nodesRemaining,
-    refFrame, sps, interParams, biPredEncodeParams, dep_gbh, slicingParam, pointCloudOut);
+    refFrame, sps, interParams, compensatedPointCloud, biPredEncodeParams, dep_gbh, slicingParam, pointCloudOut);
 
   //Output points converted from intermidiate nodes
   {

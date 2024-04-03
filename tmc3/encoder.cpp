@@ -1309,6 +1309,16 @@ PCCTMC3Encoder3::compressPartition(
       _gps->biPredictionEnabledFlag && attr_aps.attrInterPredictionEnabled
       && !abh.disableAttrInterPredForRefFrame2;
 
+    if (!attr_aps.spherical_coord_flag) {
+      if (attrInterPredParams.enableAttrInterPred)
+        attrInterPredParams.referencePointCloud = attrInterPredParams.compensatedPointCloud;
+      if (_gps->biPredictionEnabledFlag)
+        if (biPredEncodeParams.codeCurrentFrameAsBFrame
+          && biPredEncodeParams.attrInterPredParams2.enableAttrInterPred)
+          biPredEncodeParams.attrInterPredParams2.referencePointCloud = biPredEncodeParams.compensatedPointCloud2;
+    }
+
+
     if (_gps->biPredictionEnabledFlag) {
       //FrameMerge for attribute inter prediction
       if (
@@ -1336,18 +1346,12 @@ PCCTMC3Encoder3::compressPartition(
     attrInterPredParams.paramsForInterRAHT.raht_enable_inter_intra_layer_RDO =
       attr_aps.raht_enable_code_layer;
     attrInterPredParams.attr_layer_code_mode.clear();
-    if (attr_sps.attr_num_dimensions_minus1 == 0 && !_gps->geom_angular_mode_enabled_flag)
-      attrInterPredParams.enableSkipCode = false;
-    else
-      attrInterPredParams.enableSkipCode = true;
-
+    
     attrInterPredParams.attrInterIntraSliceRDO =
       attr_enc.attrInterIntraSliceRDO && attr_aps.attrInterPredictionEnabled;
 
 	if (attr_aps.spherical_coord_flag && _gps->predgeom_enabled_flag && !_gps->biPredictionEnabledFlag)
       attrInterPredParams.useRefCloudIndex = true;
-
-
 
     // Convert cartesian positions to spherical for use in attribute coding.
     // NB: this retains the original cartesian positions to restore afterwards
@@ -1457,7 +1461,7 @@ PCCTMC3Encoder3::compressPartition(
           }
           indices.resize(ctr);
         } else {
-          attrInterPredParams.referencePointCloud = _refFrameAlt.cloud;
+          //attrInterPredParams.referencePointCloud = _refFrameAlt.cloud;
           int count = 0;
           auto& cloudTmp = attrInterPredParams.referencePointCloud;
           for (int i = 0; i < attrInterPredParams.getPointCount(); i++) {
@@ -2095,8 +2099,8 @@ PCCTMC3Encoder3::encodeGeometryBrick(
 	  else if (!_gps->trisoup_enabled_flag) {
 		  encodeGeometryOctree(
 			  params->geom, *_gps, gbh, pointCloud, *_ctxtMemOctreeGeom,
-			  arithmeticEncoders, _refFrame, *_sps, params->interGeom,
-			  biPredEncodeParams);
+			  arithmeticEncoders, _refFrame, *_sps, params->interGeom, 
+			  attrInterPredParams.compensatedPointCloud, biPredEncodeParams);
 	  }
 	  else
 	  {
@@ -2106,7 +2110,7 @@ PCCTMC3Encoder3::encodeGeometryBrick(
 		  encodeGeometryTrisoup(
 			  params->trisoup, params->geom, *_gps, gbh, pointCloud, pointCloudPadding,
 			  *_ctxtMemOctreeGeom, arithmeticEncoders, _refFrame,
-			  *_sps, params->interGeom);
+			  *_sps, params->interGeom, attrInterPredParams.compensatedPointCloud);
 	  }
 	  // signal the actual number of points coded
 	  gbh.footer.geom_num_points_minus1 = pointCloud.getPointCount() - 1;
