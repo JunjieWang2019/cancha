@@ -228,11 +228,16 @@ void determineTrisoupNeighbours(
 bool determineNormVandCentroidContexts
 (
  const Vec3<int32_t>& nodeWidth,
+ const std::vector<TrisoupNodeEdgeVertex>& eVerts,
  const TrisoupNodeEdgeVertex& eVert,
+ int nodeIndex,
+ node6nei& neiInds,
  const int bitDropped,
  Vec3<int32_t>& gravityCenter,
  Vec3<int32_t>& normalV,
- TrisoupCentroidContext& cctx
+ TrisoupCentroidContext& cctx,
+ const std::vector<TrisoupCentroidVertex>& cVerts,
+ bool twoEdgeVertices
 );
 
 void determineTrisoupNodeNeighbours
@@ -246,6 +251,7 @@ void determineTrisoupCentroids
 (
   PCCPointSet3& pointCloud,
   const ringbuf<PCCOctree3Node>& leaves,
+  std::vector<node6nei>& nodes6nei,
   const GeometryParameterSet& gps,
   const GeometryBrickHeader& gbh,
   int defaultBlockWidth,
@@ -255,7 +261,9 @@ void determineTrisoupCentroids
   std::vector<Vec3<int32_t>>& gravityCenter,
   std::vector<CentroidDrift>& drifts,
   std::vector<TrisoupCentroidVertex>& cVerts,
-  std::vector<Vec3<int32_t>>& normVs
+  std::vector<Vec3<int32_t>>& normVs,
+  const bool isFaceVertexActivated,
+  bool twoEdgeVertices = false
  );
 
 void determineTrisoupFaceVertices
@@ -299,6 +307,7 @@ void decodeTrisoupFaceList(
 
 void decodeTrisoupCentroids(
   const ringbuf<PCCOctree3Node>& leaves,
+  std::vector<node6nei>& nodes6nei,
   const GeometryParameterSet& gps,
   const GeometryBrickHeader& gbh,
   int defaultBlockWidth,
@@ -307,7 +316,12 @@ void decodeTrisoupCentroids(
   std::vector<Vec3<int32_t>>& gravityCenter,
   std::vector<TrisoupCentroidVertex>& cVerts,
   std::vector<Vec3<int32_t>>& normVs,
-  pcc::EntropyDecoder* arithmeticDecoder );
+  pcc::EntropyDecoder* arithmeticDecoder,
+  const bool isFaceVertexActivated,
+  AdaptiveBitModel ctxDrift0[9],
+  AdaptiveBitModel ctxDriftSign[3][8][8],
+  AdaptiveBitModel ctxDriftMag[4],
+  bool twoEdgeVertices = false);
 
 bool nodeBoundaryInsideCheck( Vec3<int32_t> bw, Vec3<int32_t> pt );
 
@@ -419,6 +433,19 @@ void rayTracingAlongdirection(
   bool haloFlag,
   bool adaptiveHaloFlag,
   bool fineRayflag);
+
+Vec3<int64_t> normalOfCommonPlane(
+  Vec3<int32_t> v1, 
+  Vec3<int32_t> v2);
+
+int areVerticiesOnSameFace(
+  Vec3<int32_t> v1,
+  Vec3<int32_t> v2);
+
+bool areVerticiesOnSameEdge(
+  Vec3<int32_t> v1,
+  Vec3<int32_t> v2,
+  Vec3<int32_t> nodew);
 
 //============================================================================
 

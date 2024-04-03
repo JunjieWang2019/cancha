@@ -186,8 +186,13 @@ encodeGeometryTrisoup(
   std::vector<Vec3<int32_t>> normVs;
   std::vector<Vec3<int32_t>> gravityCenter;
   determineTrisoupCentroids(
-    pointCloud, nodes, gps, gbh, blockWidth, bitDropped,
-    isCentroidDriftActivated, eVerts, gravityCenter, drifts, cVerts, normVs);
+    pointCloud, nodes, nodes6nei, gps, gbh, blockWidth, bitDropped,
+    isCentroidDriftActivated, eVerts, gravityCenter, drifts, cVerts, normVs, isFaceVertexActivated);
+
+
+  determineTrisoupCentroids(
+    pointCloud, nodes, nodes6nei, gps, gbh, blockWidth, bitDropped,
+    isCentroidDriftActivated, eVerts, gravityCenter, drifts, cVerts, normVs, isFaceVertexActivated, true);
 
   std::vector<TrisoupFace> faces;
   std::vector<TrisoupFace> limited_faces;
@@ -950,9 +955,45 @@ void processTrisoupVertices(
   }
 }
 
+int findOffsetForOpenSurface1(std::vector<int>& dists){
+  if (dists.size() == 0) return 0;
+  else if (dists.size() == 1) return dists[0];
+
+  // calculate mu
+  int mu = 0;
+  for (auto d: dists)
+    mu += abs(d);
+  mu /= dists.size();
+
+  // calculate sigma
+  int sigma = 0;
+  for (auto d: dists)
+    sigma += (abs(d) - mu)*(abs(d) - mu);
+  sigma = isqrt(sigma / dists.size());
+
+  // extract outliers and find max
+  int drift = 0;
+  for (auto d: dists){
+    if (abs(abs(d) - mu) > 2*sigma) continue;
+    drift = abs(d) > abs(drift) ? d : drift;
+  }
+  return drift;
+}
+
+int findOffsetForOpenSurface2(std::vector<int>& dists){
+  std::sort(dists.begin(), dists.end());
+  for (int i = 0; i <= dists.size() - 1; ++i){
+    if ((dists[i + 1] >> kTrisoupFpBits) - (dists[i] >> kTrisoupFpBits) > 1) {
+      return dists[i];
+    }
+  }
+  return std::max(dists.back(), 0); // cannot be negative
+}
+
 void determineTrisoupCentroids(
   PCCPointSet3& pointCloud,
   const ringbuf<PCCOctree3Node>& leaves,
+  std::vector<node6nei>& nodes6nei,
   const GeometryParameterSet& gps,
   const GeometryBrickHeader& gbh,
   int defaultBlockWidth,
@@ -962,25 +1003,39 @@ void determineTrisoupCentroids(
   std::vector<Vec3<int32_t>>& gravityCenter,
   std::vector<CentroidDrift>& drifts,
   std::vector<TrisoupCentroidVertex>& cVerts,
-  std::vector<Vec3<int32_t>>& normVs)
+  std::vector<Vec3<int32_t>>& normVs,
+  const bool isFaceVertexActivated,
+  bool twoEdgeVertices)
 {
   Box3<int32_t> sliceBB;
   sliceBB.min = gbh.slice_bb_pos << gbh.slice_bb_pos_log2_scale;
   sliceBB.max = sliceBB.min + ( gbh.slice_bb_width << gbh.slice_bb_width_log2_scale );
 
   // ----------- loop on leaf nodes ----------------------
+  int dc = 0;
   for (int i = 0; i < leaves.size(); i++) {
     Vec3<int32_t> nodepos, nodew, corner[8];
     nonCubicNode(
       gps, gbh, leaves[i].pos, defaultBlockWidth, sliceBB, nodepos, nodew,
       corner);
 
-    // Skip leaves that have fewer than 3 vertices.
-    if (eVerts[i].vertices.size() < 3) {
-      cVerts.push_back({ false, { 0, 0, 0 }, 0, true });
-      normVs.push_back({ 0, 0, 0 });
-      gravityCenter.push_back({ 0, 0, 0 });
-      continue;
+    if (!twoEdgeVertices) {
+      if (eVerts[i].vertices.size() <= 2) {
+        cVerts.push_back({ false, { 0, 0, 0 }, 0, true });
+        normVs.push_back({ 0, 0, 0 });
+        gravityCenter.push_back({ 0, 0, 0 });
+        continue;
+      }
+    } else {
+      if (eVerts[i].vertices.size() != 2) {
+        continue;
+      } else if (!areVerticiesOnSameFace(eVerts[i].vertices[0].pos, eVerts[i].vertices[1].pos)) {
+        continue;
+      } else if (areVerticiesOnSameEdge(eVerts[i].vertices[0].pos, eVerts[i].vertices[1].pos, nodew << kTrisoupFpBits)){
+        continue;
+      } else if (!isFaceVertexActivated) {
+        continue;
+      } 
     }
 
     Vec3<int32_t> gCenter={ 0 }, normalV={ 0 };
@@ -989,13 +1044,17 @@ void determineTrisoupCentroids(
     // judgment for refinement of the centroid along the domiannt axis
     bool driftCondition =
       determineNormVandCentroidContexts(
-        nodew, eVerts[i], bitDropped, gCenter, normalV, cctx);
+        nodew, eVerts, eVerts[i], i, nodes6nei[i], bitDropped, gCenter, normalV, cctx, cVerts, twoEdgeVertices);
 
     if(!(driftCondition && isCentroidDriftActivated)) {
-      cVerts.push_back({ false, gCenter, 0, true });
-      normVs.push_back(normalV);
-      gravityCenter.push_back(gCenter);
-      continue;
+      if (!twoEdgeVertices) {
+        cVerts.push_back({ false, gCenter, 0, true });
+        normVs.push_back(normalV);
+        gravityCenter.push_back(gCenter);
+        continue;
+      } else {
+        continue;
+      }
     }
 
     // Refinement of the centroid along the domiannt axis
@@ -1005,6 +1064,7 @@ void determineTrisoupCentroids(
     int driftQ = 0, drift = 0;
     int bitDropped2 = bitDropped;
     int maxD = std::max(int(3), bitDropped2);
+    std::vector<int> dists(leaves[i].end - leaves[i].start, 0);
 
     // determine quantized drift
     for (int p = leaves[i].start; p < leaves[i].end; p++) {
@@ -1014,14 +1074,20 @@ void determineTrisoupCentroids(
       int64_t dist = isqrt(CP[0] * CP[0] + CP[1] * CP[1] + CP[2] * CP[2]);
       dist >>= kTrisoupFpBits;
       if ((dist << 10) <= 1774 * maxD) {
-        int32_t w = (1 << 10) + 4 * (1774 * maxD - ((1 << 10) * dist));
-        counter += w >> 10;
-        drift +=
-          (w >> 10) * ((normalV * (point - blockCentroid)) >> kTrisoupFpBits);
+        if (eVerts[i].vertices.size() != 2) {
+          int32_t w = (1 << 10) + 4 * (1774 * maxD - ((1 << 10) * dist));
+          counter += w >> 10;
+          drift += (w >> 10) * ((normalV * (point - blockCentroid)) >> kTrisoupFpBits);
+        } else {
+          dists[p - leaves[i].start] = (normalV * (point - blockCentroid)) >> kTrisoupFpBits;
+          //dists[p - leaves[i].start] = (normalV * (point - blockCentroid)) <= 0 ? 0 : (normalV * (point - blockCentroid));
+        }
       }
     }
 
-    if (counter) { // drift is shift by kTrisoupFpBits
+    if (eVerts[i].vertices.size() == 2) {
+      drift = findOffsetForOpenSurface2(dists) >> kTrisoupFpBits - 6;
+    } else if (counter) { // drift is shift by kTrisoupFpBits
       drift = (drift >> kTrisoupFpBits - 6) / counter; // drift is shift by 6 bits
     }
 
@@ -1069,10 +1135,20 @@ void determineTrisoupCentroids(
     if (!nodeBoundaryInsideCheck( nodew<<kTrisoupFpBits, blockCentroid)) {
       boundaryInside = false;
     }
-    cVerts.push_back({ true, blockCentroid, driftDQ, boundaryInside });
-    normVs.push_back(normalV);
-    gravityCenter.push_back(gCenter);
-
+    if (twoEdgeVertices) {
+      cVerts[i].valid = true;
+      cVerts[i].pos = blockCentroid;
+      cVerts[i].drift = driftDQ;
+      cVerts[i].boundaryInside = true;
+      normVs[i] = normalV;
+      gravityCenter[i] = gCenter;
+      dc += 1;
+    } else {
+      cVerts.push_back({ true, blockCentroid, driftDQ, boundaryInside});
+      normVs.push_back(normalV);
+      gravityCenter.push_back(gCenter);
+      dc += 1;
+    }
     // end refinement of the centroid
   }
 }
@@ -1142,7 +1218,9 @@ determineTrisoupFaceVertices(
             Vec3<int32_t> zeroW =     0 << kTrisoupFpBits;
             int neVtxBoundaryFace =
               countTrisoupEdgeVerticesOnFace(eVerts[ i], nodeW, axis);
-            if (2 == neVtxBoundaryFace || 3 == neVtxBoundaryFace) {
+            if (2 == neVtxBoundaryFace && eVerts[i].vertices.size() == 2) {
+              continue;
+            } else if (2 == neVtxBoundaryFace || 3 == neVtxBoundaryFace && eVerts[i].vertices.size() != 2 && eVerts[ii].vertices.size() != 2) {
 
               Vertex fVert[2];
               findTrisoupFaceVertex(
@@ -1199,8 +1277,48 @@ determineTrisoupFaceVertices(
                   limited_faces.push_back(face);
                 }
               }
-            } // if( 2 or 3 == neVtxBoundaryFace )
-
+            } else if (1 == neVtxBoundaryFace && eVerts[i].vertices.size() == 2 && eVerts[ii].vertices.size() == 2) {
+              Vertex fVert[2];
+              findTrisoupFaceVertex(
+                i, nei, nodes6nei[i], cVerts, nodew, fVert);
+              // c0, c1 and face vertex on the same side of the surface
+              int32_t weight1 = 0, weight2 = 0;
+              uint32_t st[2] = { leaves[i].start, leaves[ii].start };
+              uint32_t ed[2] = { leaves[i].end,   leaves[ii].end   };
+              // order - 0:z, 1:y, 2:x
+              Vec3<int32_t> neiOfst[2][3] = {
+                { { 0, 0, 0 },
+                  { 0, 0, 0 },
+                  { 0, 0, 0 } },
+                { { 0, 0, nodew[2] },
+                  { 0, nodew[1], 0 },
+                  { nodew[0], 0, 0 } }
+              };
+              // 0:current-node  1:nei-node
+              for (int n = 0; n < 2; n++) {
+                Vec3<uint32_t> ofst[2] = { {0}, nodePosOfst[j] };
+                for (int k = st[n]; k < ed[n]; k++) {
+                  Vec3<int32_t> dist =
+                    fVert[n].pos
+                      - ((pointCloud[k] - nodepos - neiOfst[n][nei])
+                        << kTrisoupFpBits);
+                  int32_t d =
+                    (dist.abs().max() + kTrisoupFpHalf) >> kTrisoupFpBits;
+                  if(d < tmin1) { weight1++; }
+                  if(d < tmin2) { weight2++; }
+                }
+              }
+              if (1) {
+                face.connect = true;
+                fVerts[ i].formerEdgeVertexIdx.push_back(1); // changed
+                fVerts[ i].vertices.push_back(fVert[0]);
+                fVerts[ii].formerEdgeVertexIdx.push_back(1); // changed
+                fVerts[ii].vertices.push_back(fVert[1]);
+              }
+              if (face.connect) { _ones++;  }
+              else {              _zeros++; }
+              limited_faces.push_back(face);
+            }
           }
         }
       }

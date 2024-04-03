@@ -167,13 +167,19 @@ decodeGeometryTrisoup(
   decodeTrisoupVertices(nodes, blockWidth, segind, vertices, neighbNodes, edgePattern, bitDropped,
     gps, gbh, eVerts, arithmeticDecoder, mergeFlag);
 
+  AdaptiveBitModel ctxDrift0[9];
+  AdaptiveBitModel ctxDriftSign[3][8][8];
+  AdaptiveBitModel ctxDriftMag[4];
 
   std::vector<TrisoupCentroidVertex> cVerts;
   std::vector<Vec3<int32_t>> normVs;
   std::vector<Vec3<int32_t>> gravityCenter;
-  decodeTrisoupCentroids(nodes, gps, gbh, blockWidth, bitDropped, eVerts,
-    gravityCenter, cVerts, normVs, &arithmeticDecoder);
+  decodeTrisoupCentroids(nodes, nodes6nei, gps, gbh, blockWidth, bitDropped, eVerts,
+    gravityCenter, cVerts, normVs, &arithmeticDecoder , isFaceVertexActivated, ctxDrift0, ctxDriftSign, ctxDriftMag);
 
+
+  decodeTrisoupCentroids(nodes, nodes6nei, gps, gbh, blockWidth, bitDropped, eVerts,
+    gravityCenter, cVerts, normVs, &arithmeticDecoder , isFaceVertexActivated, ctxDrift0, ctxDriftSign, ctxDriftMag, true);
 
   std::vector<TrisoupFace> faces;
   std::vector<TrisoupNodeFaceVertex> fVerts;
@@ -571,14 +577,73 @@ void nonCubicNode
   return;
 }
 
+
+Vec3<int64_t> findDirectionOfNormal(Vec3<int32_t> reference, std::vector<Vertex> list){
+  Vec3<int> avg = 0;
+  for (auto p1: list){
+    avg += p1.pos;
+  }
+  avg /= list.size();
+  return reference - avg; //twoEdgeVertices && cVert.valid ? reference - cVert.pos : reference - avg; // reference - avg;
+}
+
+Vec3<int64_t> findDirectionOfNormalCentroid(Vec3<int32_t> reference, std::vector<Vertex> list, TrisoupCentroidVertex cVert){
+  Vec3<int> avg = 0;
+  for (auto p1: list){
+    avg += p1.pos;
+  }
+  avg /= list.size();
+  //if (cVert.valid) std::cout << cVert.drift << std::endl;
+  return cVert.valid ? reference - cVert.pos : reference - avg; // reference - avg;
+}
+
+// Determines if two trisoup vertecies are in the same plane
+int areVerticiesOnSameFace(Vec3<int32_t> v1, Vec3<int32_t> v2){
+  for (int i = 0; i < 3; ++i){
+    if (v1[i] == v2[i]) return true;
+  }
+  return false;
+}
+
+// Determines if two trisoup vertecies are in the same segment (edge)
+bool areVerticiesOnSameEdge(Vec3<int32_t> v1, Vec3<int32_t> v2, Vec3<int32_t> nodew){
+  //std::cout << nodew << std::endl;
+  int counter = 0;
+  for (int i = 0; i < 3; ++i){
+    if (v1[i] == v2[i] && (v1[i] < 0 || v1[i] >= nodew[i] - kTrisoupFpHalf)) ++counter;
+  }
+  if (counter >= 2)
+    return true;
+  return false;
+}
+
+int findIndexOfPlane(Vec3<int32_t> v1, Vec3<int32_t> v2, Vec3<int>& offset){
+  for (int i = 0; i < 3; ++i){
+    if (v1[i] == v2[i]){
+      if (v1[i] < 0) {
+        offset[i] = -1;
+        return 4 - 2*i;
+      } else {
+        offset[i] = 1;
+        return 5 - 2*i;
+      }
+    }
+  }
+}
+
 bool
 determineNormVandCentroidContexts(
   const Vec3<int32_t>& nodeWidth,
+  const std::vector<TrisoupNodeEdgeVertex>& eVerts,
   const TrisoupNodeEdgeVertex& eVert,
+  int nodeIndex,
+  node6nei& neiInds,
   const int bitDropped,
   Vec3<int32_t>& gravityCenter,
   Vec3<int32_t>& normalV,
-  TrisoupCentroidContext& cctx)
+  TrisoupCentroidContext& cctx,
+  const std::vector<TrisoupCentroidVertex>& cVerts,
+  bool twoEdgeVertices)
 {
   // compute centroid
   int triCount = (int)eVert.vertices.size();
@@ -607,7 +672,7 @@ determineNormVandCentroidContexts(
 
 
   // judgment for refinement of the centroid along the domiannt axis
-  if( triCount <= 3 ){
+  if(triCount == 3){
     normalV = { 0,0,0 };
     cctx = { 0,0,0,0,0 };
     return false;
@@ -629,16 +694,35 @@ determineNormVandCentroidContexts(
 
   // find normal vector
   Vec3<int64_t> accuNormal = 0;
-  for (int k = 0; k < triCount; k++) {
-    int k2 = k + 1;
-    if (k2 >= triCount)
-      k2 -= triCount;
-    accuNormal += crossProduct(
-      eVert.vertices[k].pos - gravityCenter,
-      eVert.vertices[k2].pos - gravityCenter);
+  if (triCount != 2){
+    for (int k = 0; k < triCount; k++) {
+      int k2 = k + 1;
+      if (k2 >= triCount)
+        k2 -= triCount;
+      accuNormal += crossProduct(
+        eVert.vertices[k].pos - gravityCenter,
+        eVert.vertices[k2].pos - gravityCenter);
+    }
+  } else { // 2 vertices
+    Vec3<int> offset = 0;
+    int ind = findIndexOfPlane(eVert.vertices[0].pos, eVert.vertices[1].pos, offset);
+    if (neiInds.idx[ind] == -1) { // || eVerts[nodes6nei.idx[ind]].vertices.size() < 3
+      normalV = { 0,0,0 };
+      cctx = { 0,0,0,0,0 };
+      return false;
+    }
+    Vec3<int> v = {offset[0] * (nodeWidth[0] << kTrisoupFpBits), offset[1] * (nodeWidth[1] << kTrisoupFpBits), offset[2] * (nodeWidth[2] << kTrisoupFpBits)};
+    if (eVerts[neiInds.idx[ind]].vertices.size() != 0) {
+      accuNormal = findDirectionOfNormalCentroid((eVert.vertices[0].pos + eVert.vertices[1].pos)/2 - v, eVerts[neiInds.idx[ind]].vertices, cVerts[neiInds.idx[ind]]);
+    } else if (accuNormal == 0) {
+      normalV = { 0,0,0 };
+      cctx = { 0,0,0,0,0 };
+      return false;
+    }
+    //accuNormal = normalOfCommonPlane(eVert.vertices[0].pos, eVert.vertices[1].pos);
   }
   int64_t normN = isqrt(
-    accuNormal[0] * accuNormal[0]
+      accuNormal[0] * accuNormal[0]
     + accuNormal[1] * accuNormal[1]
     + accuNormal[2] * accuNormal[2]);
   Vec3<int32_t> _normalV = (accuNormal<< kTrisoupFpBits) / normN;
@@ -718,6 +802,7 @@ decodeTrisoupCommon(
   // Create list of refined pointss, one leaf at a time.
   std::vector<Vec3<int32_t>> refinedVertices;
 
+  std::vector<int> distributionVerticies(12, 0);
   // ----------- loop on leaf nodes ----------------------
   for (int i = 0; i < leaves.size(); i++) {
 
@@ -744,7 +829,7 @@ decodeTrisoupCommon(
     }
 
     // Skip leaves that have fewer than 3 vertices.
-    if (eVerts[i].vertices.size() < 3) {
+    if (eVerts[i].vertices.size() < 2 || (eVerts[i].vertices.size() == 2 && !cVerts[i].valid)) {
       std::sort(refinedVerticesBlock.begin(), refinedVerticesBlock.end());
       refinedVerticesBlock.erase(
         std::unique(refinedVerticesBlock.begin(), refinedVerticesBlock.end()),
@@ -763,11 +848,24 @@ decodeTrisoupCommon(
     }
 
     std::vector<Vertex> nodeVertices;
-    for (int j = 0; j < eVerts[i].vertices.size(); j++) {
-      nodeVertices.push_back(eVerts[i].vertices[j]);
-      for(int k = 0; k < fVerts[i].vertices.size(); k++) {
-        if (j == fVerts[i].formerEdgeVertexIdx[k])
-          nodeVertices.push_back(fVerts[i].vertices[k]);
+    if (eVerts[i].vertices.size() != 2 || fVerts[i].vertices.size() == 0) {
+      for (int j = 0; j < eVerts[i].vertices.size(); j++) {
+        nodeVertices.push_back(eVerts[i].vertices[j]);
+        for(int k = 0; k < fVerts[i].vertices.size(); k++) {
+          if (j == fVerts[i].formerEdgeVertexIdx[k]) // || eVerts[i].vertices.size() == 2
+            nodeVertices.push_back(fVerts[i].vertices[k]);
+        }
+      }
+    } else {
+      for (int j = 0; j < eVerts[i].vertices.size(); ++j) {
+        if (j != 0)
+          nodeVertices.push_back(eVerts[i].vertices[j]);
+        for (int k = 0; k < fVerts[i].vertices.size(); ++k) {
+          if (areVerticiesOnSameFace(fVerts[i].vertices[k].pos, eVerts[i].vertices[j].pos))
+            nodeVertices.push_back(fVerts[i].vertices[k]);
+        }
+        if (j == 0)
+          nodeVertices.push_back(eVerts[i].vertices[j]);
       }
     }
 
@@ -785,8 +883,11 @@ decodeTrisoupCommon(
         vtxIndex++) {
       int j0 = vtxIndex;
       int j1 = vtxIndex + 1;
-      if (j1 >= vtxCount)
+      if (eVerts[i].vertices.size() == 2 && j1 >= vtxCount) {
+        break;
+      } else if (j1 >= vtxCount){
         j1 -= vtxCount;
+      }
 
       Vec3<int32_t> v0 = v1;
       v1 = nodeVertices[j1].pos;
@@ -892,7 +993,9 @@ decodeTrisoupFaceList(
             Vec3<int32_t> zeroW =     0 << kTrisoupFpBits;
             int neVtxBoundaryFace =
               countTrisoupEdgeVerticesOnFace(eVerts[ i], nodeW, axis);
-            if ((2 == neVtxBoundaryFace) || (3 == neVtxBoundaryFace)) {
+            if (2 == neVtxBoundaryFace && eVerts[i].vertices.size() == 2) {
+              continue;
+            } else if (2 == neVtxBoundaryFace || 3 == neVtxBoundaryFace && eVerts[i].vertices.size() != 2 && eVerts[ii].vertices.size() != 2) {
               Vertex fVert[2];
               findTrisoupFaceVertex(
                 i, nei, nodes6nei[i], cVerts, nodew, fVert);
@@ -917,6 +1020,17 @@ decodeTrisoupFaceList(
                   }
                 }
               }
+            } else if (1 == neVtxBoundaryFace && eVerts[i].vertices.size() == 2 && eVerts[ii].vertices.size() == 2) {
+              Vertex fVert[2];
+              findTrisoupFaceVertex(
+                i, nei, nodes6nei[i], cVerts, nodew, fVert);
+              _face.connect = !!(arithmeticDecoder.decode(ctxFaces));
+              if (_face.connect) {
+                fVerts[ i].formerEdgeVertexIdx.push_back(1);
+                fVerts[ i].vertices.push_back(fVert[0]);
+                fVerts[ii].formerEdgeVertexIdx.push_back(1);
+                fVerts[ii].vertices.push_back(fVert[1]);
+              }
             }
           }
         }
@@ -931,6 +1045,7 @@ decodeTrisoupFaceList(
 
 void decodeTrisoupCentroids(
   const ringbuf<PCCOctree3Node>& leaves,
+  std::vector<node6nei>& nodes6nei,
   const GeometryParameterSet& gps,
   const GeometryBrickHeader& gbh,
   int defaultBlockWidth,
@@ -939,7 +1054,13 @@ void decodeTrisoupCentroids(
   std::vector<Vec3<int32_t>>& gravityCenter,
   std::vector<TrisoupCentroidVertex>& cVerts,
   std::vector<Vec3<int32_t>>& normVs,
-  pcc::EntropyDecoder* arithmeticDecoder )
+  pcc::EntropyDecoder* arithmeticDecoder,
+  const bool isFaceVertexActivated,
+  AdaptiveBitModel ctxDrift0[9],
+  AdaptiveBitModel ctxDriftSign[3][8][8],
+  AdaptiveBitModel ctxDriftMag[4],
+  bool twoEdgeVertices
+  )
 {
   const bool isCentroidDriftActivated =
     gbh.trisoup_centroid_vertex_residual_flag;
@@ -950,10 +1071,11 @@ void decodeTrisoupCentroids(
     sliceBB.min + (gbh.slice_bb_width << gbh.slice_bb_width_log2_scale);
 
   // contexts for drift centroids
-  AdaptiveBitModel ctxDrift0[9];
-  AdaptiveBitModel ctxDriftSign[3][8][8];
-  AdaptiveBitModel ctxDriftMag[4];
+  //AdaptiveBitModel ctxDrift0[9];
+  //AdaptiveBitModel ctxDriftSign[3][8][8];
+  //AdaptiveBitModel ctxDriftMag[4];
 
+  int dc = 0;
   for (int i = 0; i < leaves.size(); i++) {
 
     Vec3<int32_t> nodepos, nodew, corner[8];
@@ -962,24 +1084,43 @@ void decodeTrisoupCentroids(
       corner);
 
     // Skip leaves that have fewer than 3 vertices.
-    if (eVerts[i].vertices.size() < 3) {
-      cVerts.push_back({ false, { 0, 0, 0 }, 0, true });
-      normVs.push_back({ 0, 0, 0 });
-      gravityCenter.push_back({ 0, 0, 0 });
-      continue;
+    if (!twoEdgeVertices) {
+      if (eVerts[i].vertices.size() <= 2) {
+        cVerts.push_back({ false, { 0, 0, 0 }, 0, true });
+        normVs.push_back({ 0, 0, 0 });
+        gravityCenter.push_back({ 0, 0, 0 });
+        continue;
+      }
+    } else {
+      if (eVerts[i].vertices.size() != 2) {
+        continue;
+      } else if (!areVerticiesOnSameFace(eVerts[i].vertices[0].pos, eVerts[i].vertices[1].pos)) {
+        continue;
+      } else if (areVerticiesOnSameEdge(eVerts[i].vertices[0].pos, eVerts[i].vertices[1].pos, nodew << kTrisoupFpBits)){
+        continue;
+      } else if (!isFaceVertexActivated) {
+        continue;
+      } 
+      //std::cout << i << std::endl;
     }
+    
+    //*/
 
     Vec3<int32_t> gCenter = { 0 }, normalV = { 0 };
     TrisoupCentroidContext cctx = { 0 };
 
     bool driftCondition = determineNormVandCentroidContexts(
-      nodew, eVerts[i], bitDropped, gCenter, normalV, cctx);
+      nodew, eVerts, eVerts[i], i, nodes6nei[i], bitDropped, gCenter, normalV, cctx, cVerts, twoEdgeVertices);
 
     if (!(driftCondition && isCentroidDriftActivated)) {
-      cVerts.push_back({ false, gCenter, 0, true });
-      normVs.push_back(normalV);
-      gravityCenter.push_back(gCenter);
-      continue;
+      if (!twoEdgeVertices){
+        cVerts.push_back({ false, gCenter, 0, true });
+        normVs.push_back(normalV);
+        gravityCenter.push_back(gCenter);
+        continue;
+      } else {
+        continue;
+      }
     }
 
     Vec3<int32_t> blockCentroid = gCenter;
@@ -990,56 +1131,56 @@ void decodeTrisoupCentroids(
     int lowBoundSurface = cctx.lowBoundSurface;
     int highBoundSurface = cctx.highBoundSurface;
 
-        driftQ = arithmeticDecoder->decode(ctxDrift0[ctxMinMax]) ? 0 : 1;
+      driftQ = arithmeticDecoder->decode(ctxDrift0[ctxMinMax]) ? 0 : 1;
 
-        // if not 0, drift in [-lowBound; highBound]
-        if (driftQ) {
-          // code sign
-          int lowS = std::min(7,lowBoundSurface);
-          int highS = std::min(7,highBoundSurface);
+      // if not 0, drift in [-lowBound; highBound]
+      if (driftQ) {
+        // code sign
+        int lowS = std::min(7,lowBoundSurface);
+        int highS = std::min(7,highBoundSurface);
 
-          int sign = 1;
-          if (highBound && lowBound) // otherwise sign is knwow
-            sign = arithmeticDecoder->decode(
-              ctxDriftSign[lowBound == highBound
-              ? 0 : 1 + (lowBound < highBound)][lowS][highS]);
-          else if (!highBound) // highbound is 0, so sign is negative;
-            sign = 0;
-          // otherwise sign is already set to positive
+        int sign = 1;
+        if (highBound && lowBound) // otherwise sign is knwow
+          sign = arithmeticDecoder->decode(
+            ctxDriftSign[lowBound == highBound
+            ? 0 : 1 + (lowBound < highBound)][lowS][highS]);
+        else if (!highBound) // highbound is 0, so sign is negative;
+          sign = 0;
+        // otherwise sign is already set to positive
 
-          // code remaining bits 1 to 7 at most
-          int magBound = (sign ? highBound : lowBound) - 1;
+        // code remaining bits 1 to 7 at most
+        int magBound = (sign ? highBound : lowBound) - 1;
 
-          int ctx = 0;
-          while (magBound > 0) {
-            int bit;
-            if (ctx < 4)
-              bit = arithmeticDecoder->decode(ctxDriftMag[ctx]);
-            else
-              bit = arithmeticDecoder->decode();
+        int ctx = 0;
+        while (magBound > 0) {
+          int bit;
+          if (ctx < 4)
+            bit = arithmeticDecoder->decode(ctxDriftMag[ctx]);
+          else
+            bit = arithmeticDecoder->decode();
 
-            if (bit) // magDrift==0 and magnitude coding is finished
-              break;
+          if (bit) // magDrift==0 and magnitude coding is finished
+            break;
 
-            driftQ++;
-            magBound--;
-            ctx++;
-          }
+          driftQ++;
+          magBound--;
+          ctx++;
+        }
 
-          if (!sign)
-            driftQ = -driftQ;
+        if (!sign)
+          driftQ = -driftQ;
       }
 
       // dequantize and apply drift
       int driftDQ = 0;
-      if (driftQ) {
-        driftDQ = std::abs(driftQ) << bitDropped2 + 6;
-        int half = 1 << 5 + bitDropped2;
-        int DZ = 2 * half / 3;
-        driftDQ += DZ - half; 
-        if (driftQ < 0)
-          driftDQ = -driftDQ;
-      }
+        if (driftQ) {
+          driftDQ = std::abs(driftQ) << bitDropped2 + 6;
+          int half = 1 << 5 + bitDropped2;
+          int DZ = 2 * half / 3;
+          driftDQ += DZ - half; 
+          if (driftQ < 0)
+            driftDQ = -driftDQ;
+        }
 
       blockCentroid += (driftDQ * normalV) >> 6;
       blockCentroid[0] = std::max(-kTrisoupFpHalf, blockCentroid[0]);
@@ -1055,13 +1196,25 @@ void decodeTrisoupCentroids(
       blockCentroid[2] =
         std::min(((blockWidth - 1) << kTrisoupFpBits) + kTrisoupFpHalf - 1,
           blockCentroid[2]);
+          
     bool boundaryInside = true;
     if (!nodeBoundaryInsideCheck(nodew << kTrisoupFpBits, blockCentroid)) {
       boundaryInside = false;
     }
-    gravityCenter.push_back(gCenter);
-    cVerts.push_back({ true, blockCentroid, driftDQ, boundaryInside });
-    normVs.push_back(normalV);
+    if (twoEdgeVertices) {
+      cVerts[i].valid = true;
+      cVerts[i].pos = blockCentroid;
+      cVerts[i].drift = driftDQ;
+      cVerts[i].boundaryInside = true;
+      normVs[i] = normalV;
+      gravityCenter[i] = gCenter;
+      dc += 1;
+    } else {
+      cVerts.push_back({ true, blockCentroid, driftDQ, boundaryInside});
+      normVs.push_back(normalV);
+      gravityCenter.push_back(gCenter);
+      dc += 1;
+    }
   }
 }
 
