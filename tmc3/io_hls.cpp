@@ -2338,20 +2338,6 @@ write(
   if (sps.layer_group_enabled_flag) {
 	  bs.write(abh.subgroup_weight_adjustment_enabled_flag);
 	  if (abh.subgroup_weight_adjustment_enabled_flag) {
-
-      //abh.subgroup_weight_adj_coeff_a_bits_minus1 = numBits(abh.subgroup_weight_adj_coeff_a) - 1;
-      //abh.subgroup_weight_adj_coeff_b_bits_minus1 = numBits(abh.subgroup_weight_adj_coeff_b) - 1;
-
-		  //bs.writeUe(abh.subgroup_weight_adj_coeff_a_bits_minus1);
-		  //bs.writeUe(abh.subgroup_weight_adj_coeff_b_bits_minus1);
-    //  
-		  //auto coeffABits = abh.subgroup_weight_adj_coeff_a_bits_minus1 + 1;
-		  //auto coeffBBits = abh.subgroup_weight_adj_coeff_b_bits_minus1 + 1;
-
-		  //bs.writeSn(coeffABits,abh.subgroup_weight_adj_coeff_a);
-		  //bs.writeSn(coeffBBits,abh.subgroup_weight_adj_coeff_b);
-
-      
 		  bs.writeSe(abh.subgroup_weight_adj_coeff_a);
 		  bs.writeSe(abh.subgroup_weight_adj_coeff_b);
 	  }
@@ -2540,23 +2526,10 @@ parseAbh(
   if (sps.layer_group_enabled_flag) {
 	  bs.read(&abh.subgroup_weight_adjustment_enabled_flag);
 	  if (abh.subgroup_weight_adjustment_enabled_flag) {
-		  //bs.readUe(&abh.subgroup_weight_adj_coeff_a_bits_minus1);
-		  //bs.readUe(&abh.subgroup_weight_adj_coeff_b_bits_minus1);
-    //  
-		  //auto coeffABits = abh.subgroup_weight_adj_coeff_a_bits_minus1 + 1;
-		  //auto coeffBBits = abh.subgroup_weight_adj_coeff_b_bits_minus1 + 1;
-
-		  //bs.readSn(coeffABits,&abh.subgroup_weight_adj_coeff_a);
-		  //bs.readSn(coeffBBits,&abh.subgroup_weight_adj_coeff_b);
-
-
 		  bs.readSe(&abh.subgroup_weight_adj_coeff_a);
 		  bs.readSe(&abh.subgroup_weight_adj_coeff_b);
 	  }
 	  else {
-		  //abh.subgroup_weight_adj_coeff_a_bits_minus1 = 0;
-		  //abh.subgroup_weight_adj_coeff_b_bits_minus1 = 0;
-
 		  abh.subgroup_weight_adj_coeff_a = 0;
 		  abh.subgroup_weight_adj_coeff_b = 0;
 	  }
@@ -2604,11 +2577,6 @@ write(
 			bs.write(dep_abh.context_reference_indication_flag);
 		}
 	}
-
-
-	//bs.writeUn(8, dep_abh.ref_layer_group_id);
-	//if (sps.subgroup_enabled_flag[dep_abh.ref_layer_group_id]) 			
-	//	bs.writeUn(16, dep_abh.ref_subgroup_id);
   
   assert(dep_abh.attr_sps_attr_idx < sps.attributeSets.size());
   if (dep_abh.lcpPresent(sps.attributeSets[dep_abh.attr_sps_attr_idx], aps)) {
@@ -2655,15 +2623,6 @@ write(
   
 	bs.write(dep_abh.subgroup_weight_adjustment_enabled_flag);
 	if (dep_abh.subgroup_weight_adjustment_enabled_flag) {
-		//bs.writeUe(abh.subgroup_weight_adj_coeff_a_bits_minus1);
-		//bs.writeUe(abh.subgroup_weight_adj_coeff_b_bits_minus1);
-  //  
-		//auto coeffABits = abh.subgroup_weight_adj_coeff_a_bits_minus1 + 1;
-		//auto coeffBBits = abh.subgroup_weight_adj_coeff_b_bits_minus1 + 1;
-
-		//bs.writeSn(coeffABits,dep_abh.subgroup_weight_adj_coeff_a);
-		//bs.writeSn(coeffBBits,dep_abh.subgroup_weight_adj_coeff_b);
-      
 		bs.writeSe(dep_abh.subgroup_weight_adj_coeff_a);
 		bs.writeSe(dep_abh.subgroup_weight_adj_coeff_b);
 	}
@@ -2730,13 +2689,6 @@ parseDepAbh(
 		else
 			dep_abh.context_reference_indication_flag = false;
 	}
-
-	
-	//bs.readUn(8, &abh.ref_layer_group_id);
-	//if (sps.subgroup_enabled_flag[abh.ref_layer_group_id]) 			
-	//	bs.readUn(16, &abh.ref_subgroup_id);
-	//else
-	//	abh.ref_subgroup_id = 0;
   
   assert(dep_abh.attr_sps_attr_idx < sps.attributeSets.size());
   if (dep_abh.lcpPresent(sps.attributeSets[dep_abh.attr_sps_attr_idx], aps)) {
@@ -2786,13 +2738,6 @@ parseDepAbh(
 
 	bs.read(&dep_abh.subgroup_weight_adjustment_enabled_flag);
 	if (dep_abh.subgroup_weight_adjustment_enabled_flag) {
-    
-		//auto coeffABits = abh.subgroup_weight_adj_coeff_a_bits_minus1 + 1;
-		//auto coeffBBits = abh.subgroup_weight_adj_coeff_b_bits_minus1 + 1;
-
-		//bs.readSn(coeffABits,&dep_abh.subgroup_weight_adj_coeff_a);
-		//bs.readSn(coeffBBits,&dep_abh.subgroup_weight_adj_coeff_b);
-    
 		bs.readSe(&dep_abh.subgroup_weight_adj_coeff_a);
 		bs.readSe(&dep_abh.subgroup_weight_adj_coeff_b);
 	}

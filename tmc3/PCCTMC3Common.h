@@ -806,10 +806,6 @@ struct PCCPredictor {
 		  neigh2Pos = cloud[indexes[neighbors[2].predictorIndex]];
 	  }
 
-	  //auto neigh0Pos = cloud[indexes[neighbors[0].predictorIndex]];
-	  //auto neigh1Pos = cloud[indexes[neighbors[1].predictorIndex]];
-	  //auto neigh2Pos = cloud[indexes[neighbors[2].predictorIndex]];
-
 	  if (shiftCurrent > 0 || shiftParent > 0) {
 		  if (!(neigh0Pos.x() >= bbox_min.x() && neigh0Pos.x() < bbox_max.x()
 			  && neigh0Pos.y() >= bbox_min.y() && neigh0Pos.y() < bbox_max.y()
@@ -1232,7 +1228,6 @@ computeWeightAdjustmentLSM(
 
     
   for (size_t predictorIndex = 0; predictorIndex < pointCount; ++predictorIndex) {
-    //const auto& predictor = predictors[predictorIndex];
     const uint32_t pointIndex = indexes[predictorIndex];
     const uint32_t predictorIndexOrg = (*subGroupPointIndexToOrgPredictorIndex)[pointIndex];
 
@@ -2479,8 +2474,6 @@ computeJustIndex(
   std::vector<point_t> biasedPos;
   biasedPos.reserve(packedVoxel.size());
   for (const auto& src : packedVoxel) {
-    //auto point = clacIntermediatePosition(
-    //  aps.scalable_lifting_enabled_flag || aps.layer_group_enabled_flag, lodIndex, src.position);
     auto point = clacIntermediatePosition(
       aps.scalable_lifting_enabled_flag, lodIndex, src.position);
     biasedPos.push_back(times(point, aps.lodNeighBias));
@@ -3102,7 +3095,6 @@ buildPredictorsFast(
   }
   std::reverse(indexes.begin(), indexes.end());
   updatePredictors(pointIndexToPredictorIndex, predictors, attrInterPredParams.frameDistance);
-  //updatePredictors(pointIndexToPredictorIndex, predictors);
   std::reverse(
     numberOfPointsPerLevelOfDetail.begin(),
     numberOfPointsPerLevelOfDetail.end());
@@ -3404,7 +3396,6 @@ inline
 std::vector<std::vector<std::map<int, int>>>
 SubgroupQuantizationWeightAdjustment_forFullLayerGroupSlicingEncoder(
 	std::vector<uint64_t>& quantWeights,
-	//LayerGroupSlicingParams& layerGroupParams,
 	int numLayerGroupsMinus1, 
 	std::vector<int> numSubgroupsMinus1,
 	std::vector<int> numberOfPointsPerLodPerSubgroups,
@@ -3486,10 +3477,6 @@ SubgroupQuantizationWeightAdjustment_forFullLayerGroupSlicingEncoder(
 		coeff[i].resize(numSubgroups);
 
 		if (i == 0) {	// for lod 0
-			//quantWeights[0] += (_quantWeights_top[0][0] - _quantWeights_bottom[0][0])
-			//	* numRefNodesInTheSameSubgroup[0] / numRefNodesInTheSameSubgroup[idxSelectedNodes[0][0]]
-			//	+ _quantWeights_bottom[0][0];
-
 			coeff[0][0][0] = quantWeights_top[0][0] - quantWeights_bottom[0][0];
 			coeff[0][0][1] = quantWeights_bottom[0][0];
 		}
@@ -3503,16 +3490,10 @@ SubgroupQuantizationWeightAdjustment_forFullLayerGroupSlicingEncoder(
 
 				for (int m = 0; m < numPoints; m++) {
 					if (numRefNodesInTheSameSubgroup[idxSelectedNodes[lyrgrpIdx][subgrpIdx]]) {
-						//quantWeights[predCnt] += (_quantWeights_top[lyrgrpIdx][subgrpIdx] - _quantWeights_bottom[lyrgrpIdx][subgrpIdx])
-						//* numRefNodesInTheSameSubgroup[predCnt] / numRefNodesInTheSameSubgroup[idxSelectedNodes[lyrgrpIdx][subgrpIdx]]
-						//+ _quantWeights_bottom[lyrgrpIdx][subgrpIdx];
-
 						coeff[lyrgrpIdx][subgrpIdx][0] = quantWeights_top[lyrgrpIdx][subgrpIdx] - quantWeights_bottom[lyrgrpIdx][subgrpIdx];
 						coeff[lyrgrpIdx][subgrpIdx][1] = quantWeights_bottom[lyrgrpIdx][subgrpIdx];
 					}
 					else {
-						//quantWeights[predCnt] += _quantWeights_bottom[lyrgrpIdx][subgrpIdx];
-
 						coeff[lyrgrpIdx][subgrpIdx][0] = 0;
 						coeff[lyrgrpIdx][subgrpIdx][1] = quantWeights_bottom[lyrgrpIdx][subgrpIdx];
 					}
@@ -3841,9 +3822,6 @@ computeNearestNeighbors(
 	auto rangeInterLod = aps.inter_lod_search_range;
 	auto rangeIntraLod = aps.intra_lod_search_range;
 
-	//const auto rangeInterLod = aps.inter_lod_search_range;
-	//const auto rangeIntraLod = aps.intra_lod_search_range;
-
 	static const uint8_t kNeighOffset[27] = {
 	  7,   // { 0,  0,  0} 0
 	  3,   // {-1,  0,  0} 1
@@ -3873,16 +3851,6 @@ computeNearestNeighbors(
 	  8,   // {-1, -1,  1} 25
 	  0    // {-1, -1, -1} 26
 	};
-
-	//// The point positions biased by lodNieghBias
-	//// todo(df): preserve this
-	//std::vector<point_t> biasedPos;
-	//biasedPos.reserve(packedVoxel.size());
-	//for (const auto& src : packedVoxel) {
-	//  auto point = clacIntermediatePosition(
-	//    aps.scalable_lifting_enabled_flag, lodIndex, src.position);
-	//  biasedPos.push_back(times(point, aps.lodNeighBias));
-	//}
 
 	atlas.reserve(retainedSize);
 	std::vector<int32_t> neighborIndexes;
@@ -4188,15 +4156,6 @@ computeNearestNeighbors(
 
 			predictor.neighborCount = (localIndexes[0] != -1)
 				+ (localIndexes[1] != -1) + (localIndexes[2] != -1);
-
-			//for (int32_t h = 0; h < predictor.neighborCount; ++h)
-			//  localIndexes[h] = retained[localIndexes[h]];
-			//if (aps.predictionWithDistributionEnabled) {
-			//  int neighborCount2 = (localIndexes[3] != -1) + (localIndexes[4] != -1)
-			//    + (localIndexes[5] != -1);
-			//  for (int32_t h = 3; h < 3 + neighborCount2; ++h)
-			//    localIndexes[h] = retained[localIndexes[h]];
-			//}
 		}
 
 		if (lodIndex >= aps.intra_lod_prediction_skip_layers) {
@@ -4862,7 +4821,6 @@ buildPredictorsFast_forFullLayerGroupSlicingEncoder(
 				std::sort(packedVoxelRef.begin() + i, packedVoxelRef.begin() + iEnd);
 			}
 		}
-		//retainedRef.reserve(pointCountRef);
 
 		numberOfPointsPerLevelOfDetailRef.resize(0);
 		indexesRef.resize(0);
@@ -4980,7 +4938,7 @@ buildPredictorsFast_forFullLayerGroupSlicingEncoder(
 						}
 
 						for (int m = 0; m < numSubgroups[lyrGrpIdx]; m++) {
-							if (true) {		//if (sliceSelectionIndicationFlag[lyrGrpIdx][m]) {
+							if (true) {
 								for (int k = 0; k < dcmNodesIdx[curLodIndex][m].size(); k++) {
 									auto pointCloudIndex = dcmNodesIdx[curLodIndex][m][k];
 									auto packedVoxelIndex = pointIdxToPackedVoxelIdx[pointCloudIndex];
@@ -5001,8 +4959,7 @@ buildPredictorsFast_forFullLayerGroupSlicingEncoder(
 
 			if (dcmNodesPresentFlag) {
 				for (int i = 0; i < numSubgroups[prtLayerGroup]; i++) {
-					if (true		//if (sliceSelectionIndicationFlag[prtLayerGroup][i]
-						&& dcmNodeList_ParentSubgroup[i].size()) {
+					if (true && dcmNodeList_ParentSubgroup[i].size()) {
 						for (int j = 0; j < dcmNodeList_ParentSubgroup[i].size(); j++)
 							retained_subgroup[i].push_back(dcmNodeList_ParentSubgroup[i][j]);
 						std::sort(retained_subgroup[i].begin(), retained_subgroup[i].end());
@@ -5017,7 +4974,7 @@ buildPredictorsFast_forFullLayerGroupSlicingEncoder(
 					auto prev = retained.size();
 					int parentLayerIndex = layerIdx - 2;
 					for (int i = 0; i < numSubgroups[prtLayerGroup]; i++) {
-						if (true) {		//if (sliceSelectionIndicationFlag[prtLayerGroup][i]) {
+						if (true) {
 							for (int k = 0; k < dcmNodesIdx[parentLayerIndex][i].size(); k++) {
 								auto pointCloudIndex = dcmNodesIdx[parentLayerIndex][i][k];
 
@@ -5033,7 +4990,7 @@ buildPredictorsFast_forFullLayerGroupSlicingEncoder(
 			for (int i = startIndex; i < endIndex; i++) {
 				curSubgroup = pointIdxToSubgroupIdx[packedVoxel[indexes[i]].index][curLayerGroup];
 
-				if (true) 		//if (sliceSelectionIndicationFlag[curLayerGroup][curSubgroup])
+				if (true)
 					indexes_subgroup[curSubgroup].push_back(indexes[i]);
 			}
 		}
@@ -5093,7 +5050,7 @@ buildPredictorsFast_forFullLayerGroupSlicingEncoder(
 
 			int count = 0;
 			for (int i = 0; i < numSubgroups[curLayerGroup]; i++) {
-				if (true) {//if (sliceSelectionIndicationFlag[curLayerGroup][i]) {
+				if (true) {
 					if (curLayerGroup == prtLayerGroup)
 						prtSubgroup = i;
 					else {
@@ -5228,7 +5185,6 @@ buildPredictorsFast_forFullLayerGroupSlicingEncoder(
 	}
 	std::reverse(indexes.begin(), indexes.end());
 	updatePredictors(pointIndexToPredictorIndex, predictors, attrInterPredParams.frameDistance);
-	//updatePredictors(pointIndexToPredictorIndex, predictors);
 	std::reverse(
 		numberOfPointsPerLevelOfDetail.begin(),
 		numberOfPointsPerLevelOfDetail.end());

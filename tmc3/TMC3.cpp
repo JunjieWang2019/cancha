@@ -1981,8 +1981,6 @@ sanitizeEncoderOpts(
   
   if(!params.encoder.lgsp.layerGroupEnabledFlag){
     params.encoder.sps.layer_group_enabled_flag = false;
-  }else{
-    //params.encoder.gps.geom_octree_depth_planar_eligibiity_enabled_flag = false;
   }
   
   if(!params.encoder.lgsp.layerGroupEnabledFlag){

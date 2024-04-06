@@ -978,7 +978,6 @@ AttributeDecoder::decodeReflectancesLift(
   const size_t pointCount = pointCloud.getPointCount();
   std::vector<uint64_t> weights;
     
-  //if (!aps.scalable_lifting_enabled_flag && !aps.layer_group_enabled_flag) {
   if (!aps.scalable_lifting_enabled_flag) {
     PCCComputeQuantizationWeights(_lods.predictors, weights, attrInterPredParams.enableAttrInterPred);
   } else {

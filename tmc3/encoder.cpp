@@ -1510,7 +1510,6 @@ PCCTMC3Encoder3::compressPartition(
       const auto& attr_enc = params->attr[attrIdx];
       const auto& label = attr_sps.attributeLabel;    
 
-      // todo(df): move elsewhere?
       AttributeBrickHeader abh;
       abh.attr_attr_parameter_set_id = attr_aps.aps_attr_parameter_set_id;
       abh.attr_sps_attr_idx = attrIdx;

@@ -1091,9 +1091,6 @@ PCCTMC3Decoder3::decodeAttributeBrick(const PayloadBuffer& buf)
   int curArrayIdx = 0;
   if (_sps->layer_group_enabled_flag && attr_aps.layer_group_enabled_flag) {
 
-  // savedNode could be released because 
-  // point cloud information for attribute decoding were stored as _subgroupPointCloud
-  // The context tables of geometry also could be released but they are remained for fair comparison with the alternative contribution
     _gHandler.releaseCtxForGeometry();
     _gHandler.releaseNodes();
 

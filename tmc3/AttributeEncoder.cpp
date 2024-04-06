@@ -923,10 +923,7 @@ AttributeEncoder::encodeReflectancesPred(
     
     if(slicingParam.is_dependent_unit && (predictorIndex < _lods.numPointsInLod[0])){
         const auto parentIndex = predictor.neighbors[0].predictorIndex;
-        predictedReflectance = slicingParam.buf.pointCloudParent->getReflectance(parentIndex);
-
-        
-    //std::cout << predictorIndex << ": " << predictedReflectance <<std::endl;
+        predictedReflectance = slicingParam.buf.pointCloudParent->getReflectance(parentIndex);  
     }else{
         predictedReflectance = predictor.predictReflectance(pointCloud, _lods.indexes, attrInterPredParams);
     }

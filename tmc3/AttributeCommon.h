@@ -105,10 +105,6 @@ struct AttributeLods {
 	  int minGeomNodeSizeLog2,
 	  const PCCPointSet3& cloud,
 	  const AttributeInterPredParams& attrInterPredParams,
-	  //LayerGroupSlicingParams& layerGroupParams,
-	  //const int layerGroupIdx,
-	  //const int subgroupIdx,
-	  //int* tempPointCloudIdx)
 	  bool layerGroupEnabledFlag,
 	  int rootNodeSizeLog2,
 	  int rootNodeSizeLog2_coded,
