@@ -163,8 +163,9 @@ decodeGeometryTrisoup(
   std::vector<bool> segind;
   std::vector<uint8_t> vertices;
   std::vector<TrisoupNodeEdgeVertex> eVerts;
-  decodeTrisoupVertices(nodes, blockWidth, segind, vertices, neighbNodes,
-    edgePattern, bitDropped, gps, gbh, eVerts, arithmeticDecoder);
+  const bool mergeFlag = gbh.trisoup_vertex_merge;
+  decodeTrisoupVertices(nodes, blockWidth, segind, vertices, neighbNodes, edgePattern, bitDropped,
+    gps, gbh, eVerts, arithmeticDecoder, mergeFlag);
 
 
   std::vector<TrisoupCentroidVertex> cVerts;
@@ -1287,7 +1288,8 @@ void decodeTrisoupVertices(
   const GeometryParameterSet& gps,
   const GeometryBrickHeader& gbh,
   std::vector<TrisoupNodeEdgeVertex>& eVerts,
-  pcc::EntropyDecoder& arithmeticDecoder)
+  pcc::EntropyDecoder& arithmeticDecoder,
+  bool mergeFlag)
 {
   // not use
   PCCPointSet3 dummyPointCloud;
@@ -1296,7 +1298,7 @@ void decodeTrisoupVertices(
   PCCPointSet3 pointCloudPadding;
   std::vector<int> indices;
   processTrisoupVertices(
-    gps, gbh, leaves, defaultBlockWidth, bitDropped, true, dummyPointCloud,
+    gps, gbh, leaves, defaultBlockWidth, bitDropped,mergeFlag, true, dummyPointCloud,
     dummyDistanceSearchEncoder, neighbNodes, edgePattern, arithmeticDecoder,
     eVerts, segind, vertices, nodesPadded, pointCloudPadding, indices);
 }

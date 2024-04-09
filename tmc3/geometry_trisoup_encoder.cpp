@@ -41,6 +41,7 @@
 #include "pointset_processing.h"
 #include "geometry.h"
 #include "geometry_octree.h"
+#include <map>
 
 namespace pcc {
 
@@ -155,6 +156,7 @@ encodeGeometryTrisoup(
     determineTrisoupNodeNeighbours(nodes, nodes6nei, blockWidth);
   }
 
+  bool mergeFlag = gbh.trisoup_vertex_merge;
   std::vector<bool> segind;
   std::vector<uint8_t> vertices;
   std::vector<TrisoupNodeEdgeVertex> eVerts;
@@ -163,7 +165,7 @@ encodeGeometryTrisoup(
     gps, gbh,
     blockWidth, bitDropped, eVerts,
     distanceSearchEncoder, nodesPadded, pointCloudPadding, indices,
-    estimatedSampling, opt.nodeUniqueDSE);
+    estimatedSampling, opt.nodeUniqueDSE, mergeFlag);
 
   // Determine neighbours
   std::vector<uint16_t> neighbNodes;
@@ -351,7 +353,8 @@ determineTrisoupVertices(
   const PCCPointSet3& pointCloudPadding,
   std::vector<int> indices,
   float estimatedSampling,
-  bool nodeUniqueDSE)
+  bool nodeUniqueDSE,
+  bool mergeFlag)
 {
   // not use
   std::vector<uint16_t> neighbNodes;
@@ -359,7 +362,7 @@ determineTrisoupVertices(
   pcc::EntropyDecoder arithmeticDecoder;
 
   processTrisoupVertices(
-    gps, gbh, leaves, defaultBlockWidth, bitDropped, false, pointCloud,
+    gps, gbh, leaves, defaultBlockWidth, bitDropped,mergeFlag, false, pointCloud,
     distanceSearchEncoder, neighbNodes, edgePattern, arithmeticDecoder,
     eVerts, segind, vertices, nodesPadded, pointCloudPadding, indices,
     estimatedSampling, nodeUniqueDSE);
@@ -374,7 +377,7 @@ void processTrisoupVertices(
   const ringbuf<PCCOctree3Node>& leaves,
   const int defaultBlockWidth,
   const int bitDropped,
-
+  bool mergeFlag,
   bool isDecoder,
 
   // input only encoder
@@ -757,6 +760,8 @@ void processTrisoupVertices(
   std::vector<TrisoupSegment> uniqueSegments;
   uniqueSegments.push_back(segments[0]);
   segmentsPerNode[segments[0].index].uniqueIndex = 0;
+  std::map<Vec3<int32_t>, int> triNodeEnable;
+  std::vector<int> vNum(leaves.size(), 0);
   for (int i = 1; i < segments.size(); i++) {
     if (uniqueSegments.back().startpos != segments[i].startpos
         || uniqueSegments.back().endpos != segments[i].endpos) {
@@ -772,18 +777,34 @@ void processTrisoupVertices(
 
   // Get vertex for each unique segment that intersects the surface.
   int vertexCount = 0;
+  int32_t th = std::min(8 << kTrisoupFpBits,defaultBlockWidth<<(kTrisoupFpBits-2));
+  int32_t bmax = defaultBlockWidth << kTrisoupFpBits;
   for (int i = 0; i < uniqueSegments.size(); i++) {
     if (segind[i]) {  // intersects the surface
       uniqueSegments[i].vertex = vertices[vertexCount++];
+      if (mergeFlag) {
+        int32_t reQVert =(uniqueSegments[i].vertex << (kTrisoupFpBits + bitDropped))+ (kTrisoupFpHalf << bitDropped);
+        if (reQVert<th) {
+            triNodeEnable[uniqueSegments[i].startpos]++;
+        }
+
+        if (bmax - reQVert<th) {
+            triNodeEnable[uniqueSegments[i].endpos]++;
+        }
+      }
     } else {  // does not intersect the surface
       uniqueSegments[i].vertex = -1;
     }
   }
 
   // Copy vertices back to original (non-unique, non-sorted) segments.
-  for (int i = 0; i < leaves.size()*12; i++) {
-    segmentsPerNode[i].vertex =
-      uniqueSegments[segmentsPerNode[i].uniqueIndex].vertex;
+  for (int i = 0; i < leaves.size(); i++) {
+    for (int j = 0; j < 12; j++) {
+      segmentsPerNode[i * 12 + j].vertex =uniqueSegments[segmentsPerNode[i * 12 + j].uniqueIndex].vertex;
+      if (segmentsPerNode[i * 12 + j].vertex != -1) {
+        vNum[i]++;
+      }
+    }
   }
 
 
@@ -796,12 +817,56 @@ void processTrisoupVertices(
       gps, gbh, leaves[i].pos, defaultBlockWidth, sliceBB, nodepos, nodew,
       corner);
 
+    std::vector<bool> triNodeVertex(8, false);
+    bool addVertex[12][2] = {false};
+    bool edgeFix[12][2] = {false};
+    int M = 4;
+    int N = 6;
+    int perVertexNum = 0;
+    perVertexNum = vNum[i];
+    if (mergeFlag) {
+      for (int n = 0; n < 8; n++) {
+        Vec3<int32_t> value = nodepos + corner[n];
+        auto it = triNodeEnable.find(value);
+        if (it != triNodeEnable.end())
+          if (it->second >= M) {
+            triNodeVertex[n] = true;
+          }
+        if (triNodeVertex[n] == true) {
+          switch (n) {
+          case 0: edgeFix[0][0] = edgeFix[1][0] = edgeFix[4][0] = true; break;
+          case 1: edgeFix[0][1] = edgeFix[3][0] = edgeFix[7][0] = true; break;
+          case 2: edgeFix[1][1] = edgeFix[2][0] = edgeFix[5][0] = true; break;
+          case 3: edgeFix[2][1] = edgeFix[3][1] = edgeFix[6][0] = true; break;
+          case 4: edgeFix[4][1] = edgeFix[8][0] = edgeFix[9][0] = true; break;
+          case 5: edgeFix[7][1] = edgeFix[8][1] = edgeFix[11][0] = true; break;
+          case 6: edgeFix[5][1] = edgeFix[9][1] = edgeFix[10][0] = true; break;
+          case 7:edgeFix[6][1] = edgeFix[10][1] = edgeFix[11][1] = true;break;
+          default: break;
+          }
+        }
+      }
+    }
     // Find up to 12 vertices for this leaf.
     for (int j = 0; j < 12; j++) {
       TrisoupSegment& segment = segmentsPerNode[i * 12 + j];
       if (segment.vertex < 0)
         continue;  // skip segments that do not intersect the surface
 
+      if (mergeFlag) {
+        int32_t reQVert = (segment.vertex << (kTrisoupFpBits + bitDropped))+ (kTrisoupFpHalf << bitDropped);
+        int32_t reQVtert2 = bmax - reQVert;
+        if (perVertexNum >= N) {
+          if (reQVert < th && edgeFix[j][0]) {
+            addVertex[j][0] = true;
+            continue;
+          }
+          if (reQVtert2 < th && edgeFix[j][1]) {
+            addVertex[j][1] = true;
+            continue;
+          }
+        }
+      }
       // Get distance along edge of vertex.
       // Vertex code is the index of the voxel along the edge of the block
       // of surface intersection./ Put decoded vertex at center of voxel,
@@ -830,6 +895,45 @@ void processTrisoupVertices(
       neVertex.vertices.push_back({ point, 0, 0 });
     }
 
+    if (mergeFlag) {
+      for (int k = 0; k < triNodeVertex.size() && perVertexNum >= N; k++) {
+        bool isAdd = false;
+        if (triNodeVertex[k] == true) {
+          switch (k) {
+          case 0:
+            isAdd = addVertex[0][0] || addVertex[1][0] || addVertex[4][0];
+            break;
+          case 1:
+            isAdd = addVertex[0][1] || addVertex[3][0] || addVertex[7][0];
+            break;
+          case 2:
+            isAdd = addVertex[1][1] || addVertex[2][0] || addVertex[5][0];
+            break;
+          case 3:
+            isAdd = addVertex[2][1] || addVertex[3][1] || addVertex[6][0];
+            break;
+          case 4:
+            isAdd = addVertex[4][1] || addVertex[8][0] || addVertex[9][0];
+            break;
+          case 5:
+            isAdd = addVertex[7][1] || addVertex[8][1] || addVertex[11][0];
+            break;
+          case 6:
+            isAdd = addVertex[5][1] || addVertex[9][1] || addVertex[10][0];
+            break;
+          case 7:
+            isAdd = addVertex[6][1] || addVertex[10][1] || addVertex[11][1];
+            break;
+          default: break;
+          }
+        }
+        if (isAdd) {
+          Vec3<int32_t> point = corner[k] << kTrisoupFpBits;
+          point -= kTrisoupFpHalf;
+          neVertex.vertices.push_back({point, 0, 0});
+        }
+      }
+    }
     // compute centroid (gravity center)
     int vtxCount = (int)neVertex.vertices.size();
     Vec3<int32_t> gCenter = 0;

@@ -749,6 +749,9 @@ struct GeometryBrickHeader {
   // Indicates if the trisoup halo is enabled or not
   bool trisoup_halo_flag;
 
+  //Indicates if the trisoup vertex merge is enable or not
+  bool trisoup_vertex_merge;
+  
   // Indicates if the trisoup halo is adaptive or not
   bool trisoup_adaptive_halo_flag;
 

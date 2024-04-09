@@ -174,6 +174,7 @@ void processTrisoupVertices(
   const ringbuf<PCCOctree3Node>& leaves,
   const int defaultBlockWidth,
   const int bitDropped,
+  bool mergeFlag,
 
   bool isDecoder,
 
@@ -215,7 +216,8 @@ void determineTrisoupVertices(
   const PCCPointSet3& pointCloudPadding,
   std::vector<int> indices,
   float estimatedSampling,
-  bool nodeUniqueDSE);
+  bool nodeUniqueDSE,
+  bool mergeFlag);
 
 void determineTrisoupNeighbours(
   const ringbuf<PCCOctree3Node>& leaves, 
@@ -338,7 +340,8 @@ void decodeTrisoupVertices(
   const GeometryParameterSet& gps,
   const GeometryBrickHeader& gbh,
   std::vector<TrisoupNodeEdgeVertex>& eVerts,
-  pcc::EntropyDecoder& arithmeticDecoder);
+  pcc::EntropyDecoder& arithmeticDecoder,
+  bool mergeFlag);
 
 void decodeTrisoupVerticesSub(
   std::vector<bool>& segind,

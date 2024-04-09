@@ -1487,6 +1487,7 @@ write(
       bs.write(gbh.trisoup_adaptive_halo_flag);
     bs.write(gbh.trisoup_fine_ray_tracing_flag);
 
+    bs.write(gbh.trisoup_vertex_merge);
     int _write_bits = 0;
     if (gps.non_cubic_node_start_edge) {
       bs.writeUe(gbh.slice_bb_pos_bits);
@@ -1679,6 +1680,7 @@ parseGbh(
       bs.readUe(&gbh.geom_qp_offset_intvl_log2_delta);
   }
 
+  gbh.trisoup_vertex_merge = false;
   if (gps.trisoup_enabled_flag) {
     bs.readUe(&gbh.trisoup_sampling_value_minus1);
     bs.readUe(&gbh.num_unique_segments_bits_minus1);
@@ -1695,6 +1697,7 @@ parseGbh(
       bs.read(&gbh.trisoup_adaptive_halo_flag);
     bs.read(&gbh.trisoup_fine_ray_tracing_flag);
 
+    bs.read(&gbh.trisoup_vertex_merge);
     gbh.slice_bb_pos_bits = 0;
     gbh.slice_bb_pos_log2_scale = 0;
     gbh.slice_bb_pos = 0;

@@ -1795,6 +1795,7 @@ PCCTMC3Encoder3::encodeGeometryBrick(
 
   gbh.trisoup_halo_flag =
     params->gbh.trisoup_halo_flag;
+  gbh.trisoup_vertex_merge = params->gbh.trisoup_vertex_merge;
   gbh.trisoup_adaptive_halo_flag =
     params->gbh.trisoup_adaptive_halo_flag;
   gbh.trisoup_fine_ray_tracing_flag =
