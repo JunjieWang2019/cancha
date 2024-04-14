@@ -1894,14 +1894,18 @@ uraht_process(
         bool nonPredFlagRDOQ = false;
         int64_t nonPredQcoeff;
         if (isEncoder && !rahtPredParams.integer_haar_enable_flag) {
+
+          int64_t recDist2 = 0;
           int64_t Dist2 = 0;
           int Ratecoeff = 0;
           int64_t lambda0;
 
+          int64_t intraRecDist2 = 0;
           int64_t intraDist2 = 0;
           int intraRatecoeff = 0;
           int64_t coeff = 0;
 
+          int64_t nonPredRecDist2 = 0;
           int64_t nonPredDist2 = 0;
           int nonPredRatecoeff = 0;
 
@@ -1926,6 +1930,10 @@ uraht_process(
             }else
               Qcoeff = q.quantize(coeff << kFixedPointAttributeShift);
 
+			auto recCoeff =
+              divExp2RoundHalfUp(q.scale(Qcoeff), kFixedPointAttributeShift);
+            recDist2 += (coeff - recCoeff) * (coeff - recCoeff);
+
             sumCoeff += std::abs(Qcoeff);
             //Ratecoeff += !!Qcoeff; // sign
             Ratecoeff +=
@@ -1937,6 +1945,11 @@ uraht_process(
               intraDist2 += intraCoeff * intraCoeff;
               auto intraQcoeff =
                 q.quantize(intraCoeff << kFixedPointAttributeShift);
+
+			  auto recIntraCoeff = divExp2RoundHalfUp(
+                q.scale(intraQcoeff), kFixedPointAttributeShift);
+              intraRecDist2 += (intraCoeff - recIntraCoeff) * (intraCoeff - recIntraCoeff);
+
               intraSumCoeff += std::abs(intraQcoeff);
               //Ratecoeff += !!Qcoeff; // sign
               intraRatecoeff += std::abs(intraQcoeff) < 15
@@ -1964,6 +1977,11 @@ uraht_process(
               }
               else
                 nonPredQcoeff = q.quantize(nonPredCoeff << kFixedPointAttributeShift);
+
+			  auto recNonPredCoeff = divExp2RoundHalfUp(
+                q.scale(nonPredQcoeff), kFixedPointAttributeShift);
+              nonPredRecDist2 +=
+                (nonPredCoeff - recNonPredCoeff) * (nonPredCoeff - recNonPredCoeff);
 
               
               nonPredSumCoeff += std::abs(nonPredQcoeff);
@@ -1993,7 +2011,7 @@ uraht_process(
            
             Rate += (Ratecoeff + 128) >> 8;
 
-            flagRDOQ = (Dist2 << 26) < lambda * Rate;
+            flagRDOQ = (Dist2 << 26) < (lambda * Rate + (recDist2 << 26));
           }
           if (curLevelEnableACInterPred && intraSumCoeff < 3) {
             int intraRate =
@@ -2012,7 +2030,7 @@ uraht_process(
               intraRate += 2;
             }
             intraRate += (intraRatecoeff + 128) >> 8;
-            intraFlagRDOQ = (intraDist2 << 26) < lambda * intraRate;
+            intraFlagRDOQ = (intraDist2 << 26) < (lambda * intraRate + (intraRecDist2 << 26));
           }
           if (curLevelEnableACIntraPred && intraSumCoeff < 3) {
 
@@ -2033,7 +2051,7 @@ uraht_process(
             //Rate = Rate / std::max(1, trainZeros);
             nonPredRate += (nonPredRatecoeff + 128) >> 8;
 
-            nonPredFlagRDOQ = (nonPredDist2 << 26) < lambda * nonPredRate;
+            nonPredFlagRDOQ = (nonPredDist2 << 26) < (lambda * nonPredRate + (nonPredRecDist2 << 26));
           }
 
           // Track RL for RDOQ
