@@ -1273,6 +1273,7 @@ PCCTMC3Encoder3::compressPartition(
     abh.attr_layer_qp_delta_chroma = attr_enc.abh.attr_layer_qp_delta_chroma;
     abh.attr_raht_ac_coeff_qp_delta_luma = {};
     abh.attr_raht_ac_coeff_qp_delta_chroma = {};
+    abh.geomEnableBiInterPred = _gbh.biPredictionEnabledFlag;
 
     if(_gbh.interPredictionEnabledFlag)
       abh.attr_qp_delta_luma = attr_aps.qpShiftStep;

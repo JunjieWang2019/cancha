@@ -2304,7 +2304,10 @@ write(
 
   if (aps.attrInterPredictionEnabled) {
     bs.write(abh.enableAttrInterPred);
-    bs.write(abh.disableAttrInterPredForRefFrame2);
+    if (abh.geomEnableBiInterPred) {
+      bs.write(abh.disableAttrInterPredForRefFrame2);
+    }
+      
     if (
       aps.raht_enable_code_layer && abh.enableAttrInterPred
       && aps.attr_encoding == AttributeEncoding::kRAHTransform) {
@@ -2484,10 +2487,12 @@ parseAbh(
         }
     }
   }
-
+  abh.disableAttrInterPredForRefFrame2 = true;
+  abh.enableAttrInterPred = false;
   if (aps.attrInterPredictionEnabled) {
     bs.read(&abh.enableAttrInterPred);
-    bs.read(&abh.disableAttrInterPredForRefFrame2);
+    if (abh.geomEnableBiInterPred)
+      bs.read(&abh.disableAttrInterPredForRefFrame2);
     
     if (
       aps.raht_enable_code_layer && abh.enableAttrInterPred

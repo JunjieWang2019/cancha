@@ -1036,6 +1036,7 @@ PCCTMC3Decoder3::decodeAttributeBrick(const PayloadBuffer& buf)
 
   // In order to determinet hat the attribute decoder is reusable, the abh
   // must be inspected.
+  abh.geomEnableBiInterPred = _gbh.biPredictionEnabledFlag;
   int abhSize;
   abh.RAHTFilterTaps.clear();
   abh = parseAbh(*_sps, attr_aps, buf, &abhSize);
