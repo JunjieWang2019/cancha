@@ -695,7 +695,11 @@ public:
   {
     motionParams.updateThresholds(frameCounter, leftThresh, rightTresh);
   }
-  bool getFrameMovingState() { return motionParams.getMovingStatus(); }
+  bool getFrameMovingState()
+  {
+    return interEnabled && globalMotionEnabled
+      && motionParams.getMovingStatus();
+  }
   void setFrameMovingState(const bool movsts)
   {
     motionParams.setMovingStatus(movsts);

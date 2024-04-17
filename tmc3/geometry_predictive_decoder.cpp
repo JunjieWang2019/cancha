@@ -509,10 +509,8 @@ PredGeomDecoder::decodeTree(
   const int NPred = _maxPredIdx + 1;
 
   std::array<std::array<int, 2>, MaxNPred> preds = {};
-  const bool frameMovingState =
-    refFrameSph.isInterEnabled() && refFrameSph.getFrameMovingState();
-  const bool frameMovingState2 =
-    refFrameSph2.isInterEnabled() && refFrameSph2.getFrameMovingState();
+  const bool frameMovingState = refFrameSph.getFrameMovingState();
+  const bool frameMovingState2 = refFrameSph2.getFrameMovingState();
 
   while (!_stack.empty()) {
     auto parentNodeIdx = _stack.back();
