@@ -494,31 +494,31 @@ boundaryinsidecheck(const Vec3<int32_t> a, const int bbsize)
 
 bool
 rayIntersectsTriangle(
-  const Vec3<int32_t>& rayOrigin,  
-  const Vec3<int32_t>& TriangleVertex0,
-  const Vec3<int32_t>& edge1,
-  const Vec3<int32_t>& edge2,
-  const Vec3<int32_t>& h,
-  int32_t a,
+  const Vec3<int64_t>& rayOrigin,
+  const Vec3<int64_t>& TriangleVertex0,
+  const Vec3<int64_t>& edge1,
+  const Vec3<int64_t>& edge2,
+  const Vec3<int64_t>& h,
+  int64_t a,
   Vec3<int32_t>& outIntersectionPoint,
   Vec3<int32_t>& outIntersectionPointUp,
   Vec3<int32_t>& outIntersectionPointDown,
   int direction,
   int haloTriangle,
   int thickness)
-{  
-  Vec3<int32_t> s = rayOrigin - TriangleVertex0;
-  int32_t u = (s * h) / a;  
+{
+  Vec3<int64_t> s = rayOrigin - TriangleVertex0;
+  int64_t u = (s * h) / a;
 
-  Vec3<int32_t> q = crossProduct(s, edge1) ;
+  Vec3<int64_t> q = crossProduct(s, edge1);
   //int32_t v = (rayVector * q) / a;
-  int32_t v =  q[direction]  / a;
+  int64_t v = q[direction] / a;
 
-  int w = kTrisoupFpOne - u - v;
+  int64_t w = kTrisoupFpOne - u - v;
 
-  int32_t t = (edge2 * (q >> kTrisoupFpBits)) / a;  
-  // outIntersectionPoint = rayOrigin + ((rayVector * t) >> kTrisoupFpBits);  
-  outIntersectionPoint[direction] +=  t;
+  int64_t t = (edge2 * (q >> kTrisoupFpBits)) / a;
+  // outIntersectionPoint = rayOrigin + ((rayVector * t) >> kTrisoupFpBits);
+  outIntersectionPoint[direction] += t;
 
   outIntersectionPointUp = outIntersectionPoint;
   outIntersectionPointUp[direction] += thickness;
@@ -805,15 +805,15 @@ decodeTrisoupCommon(
       }
 
       // precompute for rays
-      Vec3<int32_t> edge1 = v1 - v0;
-      Vec3<int32_t> edge2 = v2 - v0;
+      Vec3<int64_t> edge1 = v1 - v0;
+      Vec3<int64_t> edge2 = v2 - v0;
       int minDir = 1 << 28;
       int directionExcluded = 0;
       for (int k = 0; k <= 2; k++) {
-        Vec3<int32_t> rayVector = 0;
+        Vec3<int64_t> rayVector = 0;
         rayVector[k] = 1 << kTrisoupFpBits;
-        Vec3<int32_t> h = crossProduct(edge1, edge2) >> kTrisoupFpBits;
-        int32_t a = (rayVector * h) >> kTrisoupFpBits;
+        Vec3<int64_t> h = crossProduct(edge1, edge2) >> kTrisoupFpBits;
+        int64_t a = (rayVector * h) >> kTrisoupFpBits;
         if (std::abs(a) < minDir) {
           minDir = std::abs(a);
           directionExcluded = k;
@@ -1372,18 +1372,19 @@ void rayTracingAlongdirection(
   Vec3<int32_t> nodepos,
   int minRange[3],
   int maxRange[3],
-  Vec3<int32_t> edge1,
-  Vec3<int32_t> edge2,
-  Vec3<int32_t> v0,
+  Vec3<int64_t> edge1,
+  Vec3<int64_t> edge2,
+  Vec3<int64_t> v0,
   bool haloFlag,
   bool adaptiveHaloFlag,
-  bool fineRayflag) {
+  bool fineRayflag)
+{
 
   // check if ray tracing is valid; if not skip the direction
-  Vec3<int32_t> rayVector = 0;
+  Vec3<int64_t> rayVector = 0;
   rayVector[direction] = 1 << kTrisoupFpBits;
-  Vec3<int32_t> h = crossProduct(rayVector, edge2) >> kTrisoupFpBits;
-  int32_t a = (edge1 * h) >> kTrisoupFpBits;
+  Vec3<int64_t> h = crossProduct(rayVector, edge2) >> kTrisoupFpBits;
+  int64_t a = (edge1 * h) >> kTrisoupFpBits;
   if (std::abs(a) <= kTrisoupFpOne)
     return;
 
@@ -1395,7 +1396,7 @@ void rayTracingAlongdirection(
   const int32_t endposG1 = maxRange[g1pos[direction]];
   const int32_t endposG2 = maxRange[g2pos[direction]];
   const int32_t rayStart = minRange[direction] << kTrisoupFpBits;
-  Vec3<int32_t>  rayOrigin = rayStart;
+  Vec3<int64_t> rayOrigin = rayStart;
 
 
   // ray tracing

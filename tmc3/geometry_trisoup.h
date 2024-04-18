@@ -410,9 +410,9 @@ void rayTracingAlongdirection(
   Vec3<int32_t> nodepos,
   int minRange[3],
   int maxRange[3],
-  Vec3<int32_t> edge1,
-  Vec3<int32_t> edge2,
-  Vec3<int32_t> v0,
+  Vec3<int64_t> edge1,
+  Vec3<int64_t> edge2,
+  Vec3<int64_t> v0,
   bool haloFlag,
   bool adaptiveHaloFlag,
   bool fineRayflag);
