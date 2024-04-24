@@ -1549,8 +1549,12 @@ uraht_process(
 
       int weights_ref[8 + 8 + 8 + 8] = {};
       bool interNode = false;
-      if (curLevelEnableACInterPred
-          || (enableACInterPred && !enablePredictionInLvl)) {
+
+      bool checkInterNode = enableACInterPred;
+      if(enableACRDOInterPred)
+        checkInterNode = curLevelEnableACInterPred;
+
+      if (checkInterNode) {
         const auto cur_pos = weightsLf[i].pos >> (level + 3);
         auto ref_pos = weightsLf_ref[j].pos >> (level_ref + 3);
         while ((j < weightsLf_ref.size() - 1) && (cur_pos > ref_pos)) {
