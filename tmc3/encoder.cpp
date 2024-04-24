@@ -369,7 +369,8 @@ PCCTMC3Encoder3::compress(
       else if (!params->gps.trisoup_enabled_flag)
         params->interGeom.motionParams.updateThresholds(
           _frameCounter, leftOffset, rightOffset);
-    } else {
+    } 
+    if (params->predGeom.enablePartition) {
       params->predGeom.splitter = rightOffset - bbox.min.z(); 
       params->predGeom.splitter =
         int(params->predGeom.splitter * _inputDecimationScale);

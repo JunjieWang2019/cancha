@@ -1557,7 +1557,7 @@ encodePredictiveGeometry(
     // then build and encode the tree
     auto nodes = gps.geom_angular_mode_enabled_flag
       ? generateGeomPredictionTreeAngular(
-          gps, origin, begin, end, beginSph, opt.enablePartition,splitter, reversed)
+          gps, origin, begin, end, beginSph, opt.enablePartition && !refFrameSph.isInterEnabled(),splitter, reversed)
       : generateGeomPredictionTree(gps, begin, end);
 
     // Determining minimum radius for prediction.
