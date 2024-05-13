@@ -236,8 +236,7 @@ bool determineNormVandCentroidContexts
  Vec3<int32_t>& gravityCenter,
  Vec3<int32_t>& normalV,
  TrisoupCentroidContext& cctx,
- const std::vector<TrisoupCentroidVertex>& cVerts,
- bool twoEdgeVertices
+ const std::vector<TrisoupCentroidVertex>& cVerts
 );
 
 void determineTrisoupNodeNeighbours

@@ -955,34 +955,9 @@ void processTrisoupVertices(
   }
 }
 
-int findOffsetForOpenSurface1(std::vector<int>& dists){
-  if (dists.size() == 0) return 0;
-  else if (dists.size() == 1) return dists[0];
-
-  // calculate mu
-  int mu = 0;
-  for (auto d: dists)
-    mu += abs(d);
-  mu /= dists.size();
-
-  // calculate sigma
-  int sigma = 0;
-  for (auto d: dists)
-    sigma += (abs(d) - mu)*(abs(d) - mu);
-  sigma = isqrt(sigma / dists.size());
-
-  // extract outliers and find max
-  int drift = 0;
-  for (auto d: dists){
-    if (abs(abs(d) - mu) > 2*sigma) continue;
-    drift = abs(d) > abs(drift) ? d : drift;
-  }
-  return drift;
-}
-
-int findOffsetForOpenSurface2(std::vector<int>& dists){
+int findOffsetForOpenSurface(std::vector<int>& dists){
   std::sort(dists.begin(), dists.end());
-  for (int i = 0; i <= dists.size() - 1; ++i){
+  for (int i = 0; i < dists.size() - 1; ++i){
     if ((dists[i + 1] >> kTrisoupFpBits) - (dists[i] >> kTrisoupFpBits) > 1) {
       return dists[i];
     }
@@ -1012,7 +987,6 @@ void determineTrisoupCentroids(
   sliceBB.max = sliceBB.min + ( gbh.slice_bb_width << gbh.slice_bb_width_log2_scale );
 
   // ----------- loop on leaf nodes ----------------------
-  int dc = 0;
   for (int i = 0; i < leaves.size(); i++) {
     Vec3<int32_t> nodepos, nodew, corner[8];
     nonCubicNode(
@@ -1042,9 +1016,10 @@ void determineTrisoupCentroids(
     TrisoupCentroidContext cctx={ 0 };
 
     // judgment for refinement of the centroid along the domiannt axis
+    auto neighbour = isFaceVertexActivated ? nodes6nei[i] : node6nei();
     bool driftCondition =
       determineNormVandCentroidContexts(
-        nodew, eVerts, eVerts[i], i, nodes6nei[i], bitDropped, gCenter, normalV, cctx, cVerts, twoEdgeVertices);
+        nodew, eVerts, eVerts[i], i, neighbour, bitDropped, gCenter, normalV, cctx, cVerts);
 
     if(!(driftCondition && isCentroidDriftActivated)) {
       if (!twoEdgeVertices) {
@@ -1080,13 +1055,12 @@ void determineTrisoupCentroids(
           drift += (w >> 10) * ((normalV * (point - blockCentroid)) >> kTrisoupFpBits);
         } else {
           dists[p - leaves[i].start] = (normalV * (point - blockCentroid)) >> kTrisoupFpBits;
-          //dists[p - leaves[i].start] = (normalV * (point - blockCentroid)) <= 0 ? 0 : (normalV * (point - blockCentroid));
         }
       }
     }
 
     if (eVerts[i].vertices.size() == 2) {
-      drift = findOffsetForOpenSurface2(dists) >> kTrisoupFpBits - 6;
+      drift = findOffsetForOpenSurface(dists) >> kTrisoupFpBits - 6;
     } else if (counter) { // drift is shift by kTrisoupFpBits
       drift = (drift >> kTrisoupFpBits - 6) / counter; // drift is shift by 6 bits
     }
@@ -1142,12 +1116,10 @@ void determineTrisoupCentroids(
       cVerts[i].boundaryInside = true;
       normVs[i] = normalV;
       gravityCenter[i] = gCenter;
-      dc += 1;
     } else {
       cVerts.push_back({ true, blockCentroid, driftDQ, boundaryInside});
       normVs.push_back(normalV);
       gravityCenter.push_back(gCenter);
-      dc += 1;
     }
     // end refinement of the centroid
   }
@@ -1310,9 +1282,9 @@ determineTrisoupFaceVertices(
               }
               if (1) {
                 face.connect = true;
-                fVerts[ i].formerEdgeVertexIdx.push_back(1); // changed
+                fVerts[ i].formerEdgeVertexIdx.push_back(1);
                 fVerts[ i].vertices.push_back(fVert[0]);
-                fVerts[ii].formerEdgeVertexIdx.push_back(1); // changed
+                fVerts[ii].formerEdgeVertexIdx.push_back(1);
                 fVerts[ii].vertices.push_back(fVert[1]);
               }
               if (face.connect) { _ones++;  }

@@ -584,7 +584,7 @@ Vec3<int64_t> findDirectionOfNormal(Vec3<int32_t> reference, std::vector<Vertex>
     avg += p1.pos;
   }
   avg /= list.size();
-  return reference - avg; //twoEdgeVertices && cVert.valid ? reference - cVert.pos : reference - avg; // reference - avg;
+  return reference - avg;
 }
 
 Vec3<int64_t> findDirectionOfNormalCentroid(Vec3<int32_t> reference, std::vector<Vertex> list, TrisoupCentroidVertex cVert){
@@ -593,8 +593,7 @@ Vec3<int64_t> findDirectionOfNormalCentroid(Vec3<int32_t> reference, std::vector
     avg += p1.pos;
   }
   avg /= list.size();
-  //if (cVert.valid) std::cout << cVert.drift << std::endl;
-  return cVert.valid ? reference - cVert.pos : reference - avg; // reference - avg;
+  return cVert.valid ? reference - cVert.pos : reference - avg;
 }
 
 // Determines if two trisoup vertecies are in the same plane
@@ -607,7 +606,6 @@ int areVerticiesOnSameFace(Vec3<int32_t> v1, Vec3<int32_t> v2){
 
 // Determines if two trisoup vertecies are in the same segment (edge)
 bool areVerticiesOnSameEdge(Vec3<int32_t> v1, Vec3<int32_t> v2, Vec3<int32_t> nodew){
-  //std::cout << nodew << std::endl;
   int counter = 0;
   for (int i = 0; i < 3; ++i){
     if (v1[i] == v2[i] && (v1[i] < 0 || v1[i] >= nodew[i] - kTrisoupFpHalf)) ++counter;
@@ -642,8 +640,7 @@ determineNormVandCentroidContexts(
   Vec3<int32_t>& gravityCenter,
   Vec3<int32_t>& normalV,
   TrisoupCentroidContext& cctx,
-  const std::vector<TrisoupCentroidVertex>& cVerts,
-  bool twoEdgeVertices)
+  const std::vector<TrisoupCentroidVertex>& cVerts)
 {
   // compute centroid
   int triCount = (int)eVert.vertices.size();
@@ -706,7 +703,7 @@ determineNormVandCentroidContexts(
   } else { // 2 vertices
     Vec3<int> offset = 0;
     int ind = findIndexOfPlane(eVert.vertices[0].pos, eVert.vertices[1].pos, offset);
-    if (neiInds.idx[ind] == -1) { // || eVerts[nodes6nei.idx[ind]].vertices.size() < 3
+    if (neiInds.idx[ind] == -1) {
       normalV = { 0,0,0 };
       cctx = { 0,0,0,0,0 };
       return false;
@@ -719,7 +716,6 @@ determineNormVandCentroidContexts(
       cctx = { 0,0,0,0,0 };
       return false;
     }
-    //accuNormal = normalOfCommonPlane(eVert.vertices[0].pos, eVert.vertices[1].pos);
   }
   int64_t normN = isqrt(
       accuNormal[0] * accuNormal[0]
@@ -852,7 +848,7 @@ decodeTrisoupCommon(
       for (int j = 0; j < eVerts[i].vertices.size(); j++) {
         nodeVertices.push_back(eVerts[i].vertices[j]);
         for(int k = 0; k < fVerts[i].vertices.size(); k++) {
-          if (j == fVerts[i].formerEdgeVertexIdx[k]) // || eVerts[i].vertices.size() == 2
+          if (j == fVerts[i].formerEdgeVertexIdx[k])
             nodeVertices.push_back(fVerts[i].vertices[k]);
         }
       }
@@ -1070,11 +1066,6 @@ void decodeTrisoupCentroids(
   sliceBB.max =
     sliceBB.min + (gbh.slice_bb_width << gbh.slice_bb_width_log2_scale);
 
-  // contexts for drift centroids
-  //AdaptiveBitModel ctxDrift0[9];
-  //AdaptiveBitModel ctxDriftSign[3][8][8];
-  //AdaptiveBitModel ctxDriftMag[4];
-
   int dc = 0;
   for (int i = 0; i < leaves.size(); i++) {
 
@@ -1101,16 +1092,14 @@ void decodeTrisoupCentroids(
       } else if (!isFaceVertexActivated) {
         continue;
       } 
-      //std::cout << i << std::endl;
     }
-    
-    //*/
+
 
     Vec3<int32_t> gCenter = { 0 }, normalV = { 0 };
     TrisoupCentroidContext cctx = { 0 };
 
     bool driftCondition = determineNormVandCentroidContexts(
-      nodew, eVerts, eVerts[i], i, nodes6nei[i], bitDropped, gCenter, normalV, cctx, cVerts, twoEdgeVertices);
+      nodew, eVerts, eVerts[i], i, nodes6nei[i], bitDropped, gCenter, normalV, cctx, cVerts);
 
     if (!(driftCondition && isCentroidDriftActivated)) {
       if (!twoEdgeVertices){
