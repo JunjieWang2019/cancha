@@ -914,7 +914,7 @@ estimate_layer_filter(
     uint8_t occupancy = 0;
     int nodeCnt = 0;
     int64_t InheritedDCs[3]={};
-    FixedPoint finterDC(0), interParentMean(0);
+    FixedPoint finterDC[3] = {0}, interParentMean[3] = {0};
     for(int k=0; k<numAttrs; k++)
     {
       if(inheritDc)
@@ -948,18 +948,20 @@ estimate_layer_filter(
         sumWeights_ref += (uint64_t)weights_ref[nodeIdx];
         for (int k = 0; k < numAttrs; k++){
           transformInterPredBuf[k][nodeIdx] = attrsLf_ref[jLast * numAttrs + k];
+          finterDC[k] += transformInterPredBuf[k][nodeIdx];
         }
-        finterDC += transformInterPredBuf[0][nodeIdx];
       }
 
       FixedPoint rsqrtWeightSumRef(0);
       int shiftBits = sumWeights_ref > 1024 ? ilog2(sumWeights_ref - 1) >> 1 : 0;
       rsqrtWeightSumRef.val = irsqrt(sumWeights_ref) >> (40 - shiftBits - FixedPoint::kFracBits);
-      finterDC.val >>= shiftBits;
-      finterDC *= rsqrtWeightSumRef;
-      interParentMean.val = finterDC.val;
-      interParentMean.val >>= shiftBits;
-      interParentMean *= rsqrtWeightSumRef;
+      for (int k = 0; k < numAttrs; k++) {
+        finterDC[k].val >>= shiftBits;
+        finterDC[k] *= rsqrtWeightSumRef;
+        interParentMean[k].val = finterDC[k].val;
+        interParentMean[k].val >>= shiftBits;
+        interParentMean[k] *= rsqrtWeightSumRef;
+	  }
     }
     
     for (iLast = i; iLast < iEnd; iLast++) {
@@ -996,7 +998,7 @@ estimate_layer_filter(
           continue;
         } else if(weights_ref[childIdx] == 0){
           for(int k = 0; k < numAttrs; k++){
-            transformInterPredBuf[k][childIdx].val = interParentMean.val;
+            transformInterPredBuf[k][childIdx].val = interParentMean[k].val;
           }
         }
         if(weights_ref[childIdx] > 1) {
@@ -1045,7 +1047,7 @@ estimate_layer_filter(
       fwdTransformBlock222<RahtKernel>(numAttrs, transformInterPredBuf, weights);
       
       int64_t curinheritDC = (inheritDc)? InheritedDCs[0]: 0;
-      int64_t interDC= finterDC.val;
+      int64_t interDC = finterDC[0].val;
       if(curinheritDC>0 && (interDC>0)){
         bool condition1= 10*interDC < ((curinheritDC)*5);
         bool condition2= 10*interDC > ((curinheritDC)*20);
@@ -1425,7 +1427,8 @@ uraht_process(
       FixedPoint transformIntraBuf[3][8] = {};
       FixedPoint transformIntraPredBuf[3][8] = {};
       int weights[8 + 8 + 8 + 8] = {};
-      uint64_t sumWeights_ref = 0; FixedPoint finterDC(0), interParentMean(0);
+      uint64_t sumWeights_ref = 0; 
+	  FixedPoint finterDC[3] = {0}, interParentMean[3] = {0};
       Qps nodeQp[8] = {};
       uint8_t occupancy = 0;
       int64_t CoeffRecBuf[8][3] = {0};
@@ -1461,17 +1464,19 @@ uraht_process(
           sumWeights_ref += (uint64_t) weights_ref[nodeIdx];
           for (int k = 0; k < numAttrs; k++){
             transformInterPredBuf[k][nodeIdx] = attrsLf_ref[jLast * numAttrs + k];
+            finterDC[k] += transformInterPredBuf[k][nodeIdx];
           }
-          finterDC += transformInterPredBuf[0][nodeIdx];
         }
         FixedPoint rsqrtWeightSumRef(0);
         int shiftBits = sumWeights_ref > 1024 ? ilog2(sumWeights_ref - 1) >> 1 : 0;
         rsqrtWeightSumRef.val = irsqrt(sumWeights_ref) >> (40 - shiftBits - FixedPoint::kFracBits);
-        finterDC.val >>= shiftBits;
-        finterDC *= rsqrtWeightSumRef;
-        interParentMean.val = finterDC.val;
-        interParentMean.val >>= shiftBits;
-        interParentMean *= rsqrtWeightSumRef;
+        for (int k = 0; k < numAttrs; k++) {
+          finterDC[k].val >>= shiftBits;
+          finterDC[k] *= rsqrtWeightSumRef;
+          interParentMean[k].val = finterDC[k].val;
+          interParentMean[k].val >>= shiftBits;
+          interParentMean[k] *= rsqrtWeightSumRef;
+        }
       }
 
       for (iLast = i; iLast < iEnd; iLast++) {
@@ -1581,7 +1586,7 @@ uraht_process(
             continue;
           } else if(weights_ref[childIdx] == 0){
             for(int k = 0; k < numAttrs; k++){
-              transformInterPredBuf[k][childIdx].val = interParentMean.val;
+              transformInterPredBuf[k][childIdx].val = interParentMean[k].val;
             }
           }
           if(weights_ref[childIdx] > 1) {
@@ -1681,7 +1686,7 @@ uraht_process(
           fwdTransformBlock222<RahtKernel>(numAttrs, transformInterPredBuf, weights);
           
           int64_t curinheritDC = (inheritDc)? *attrRecParentUsIt: 0;
-          int64_t interDC= finterDC.val;
+          int64_t interDC= finterDC[0].val;
           
           if(curinheritDC>0 && (interDC>0)){
             bool condition1= 10*interDC < ((curinheritDC)*5);
