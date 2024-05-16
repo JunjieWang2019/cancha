@@ -1342,6 +1342,8 @@ PCCTMC3Encoder3::compressPartition(
     attrInterPredParams.attrInterIntraSliceRDO =
       attr_enc.attrInterIntraSliceRDO && attr_aps.attrInterPredictionEnabled;
 
+	if (attr_aps.spherical_coord_flag && _gps->predgeom_enabled_flag && !_gps->biPredictionEnabledFlag)
+      attrInterPredParams.useRefCloudIndex = true;
 
 
 
@@ -1362,7 +1364,7 @@ PCCTMC3Encoder3::compressPartition(
         if (
           attrInterPredParams.enableAttrInterPred
           && attr_aps.attr_encoding == AttributeEncoding::kRAHTransform) {
-          if (AttributeInterPredParams::useRefCloudIndex) {
+          if (attrInterPredParams.useRefCloudIndex) {
             attrInterPredParams.refIndexCloud = &(_refFrameAlt.cloud);
             auto& indices = attrInterPredParams.refPointCloudIndices;
             indices.resize(attrInterPredParams.refIndexCloud->getPointCount());
@@ -1382,7 +1384,7 @@ PCCTMC3Encoder3::compressPartition(
           if (
             (minPos_shift[0] || minPos_shift[1] || minPos_shift[2])
             && attr_aps.attr_encoding == AttributeEncoding::kRAHTransform) {
-            if (AttributeInterPredParams::useRefCloudIndex)
+            if (attrInterPredParams.useRefCloudIndex)
               offsetAndScaleShift(
                 minPos_shift, attr_aps.attr_coord_scale,
                 attrInterPredParams.refIndexCloud,
@@ -1439,7 +1441,7 @@ PCCTMC3Encoder3::compressPartition(
    if (attr_aps.attrInterPredictionEnabled) {
       if (attr_aps.attr_encoding != AttributeEncoding::kRAHTransform) {
         Box3<int> currentFrameBox = pointCloud.computeBoundingBox();
-        if (AttributeInterPredParams::useRefCloudIndex) {
+        if (attrInterPredParams.useRefCloudIndex) {
           attrInterPredParams.refIndexCloud = &(_refFrameAlt.cloud);
           auto& indices = attrInterPredParams.refPointCloudIndices;
           indices.resize(attrInterPredParams.refIndexCloud->getPointCount());
@@ -1455,7 +1457,7 @@ PCCTMC3Encoder3::compressPartition(
         } else {
           attrInterPredParams.referencePointCloud = _refFrameAlt.cloud;
           int count = 0;
-          auto cloudTmp = attrInterPredParams.referencePointCloud;
+          auto& cloudTmp = attrInterPredParams.referencePointCloud;
           for (int i = 0; i < attrInterPredParams.getPointCount(); i++) {
             point_t p = cloudTmp[i];
             if (currentFrameBox.contains(p)) {

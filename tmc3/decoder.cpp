@@ -1085,6 +1085,9 @@ PCCTMC3Decoder3::decodeAttributeBrick(const PayloadBuffer& buf)
     attrInterPredParams.enableSkipCode = false;
   else
     attrInterPredParams.enableSkipCode = true;
+  
+  if (attr_aps.spherical_coord_flag && _gps->predgeom_enabled_flag && !_gps->biPredictionEnabledFlag)
+    attrInterPredParams.useRefCloudIndex = true;
 
   pcc::chrono::Stopwatch<pcc::chrono::utime_inc_children_clock> clock_user;
 
@@ -1164,7 +1167,7 @@ PCCTMC3Decoder3::decodeAttributeBrick(const PayloadBuffer& buf)
       if (
         attrInterPredParams.enableAttrInterPred
         && attr_aps.attr_encoding == AttributeEncoding::kRAHTransform) {
-        if (AttributeInterPredParams::useRefCloudIndex) {
+        if (attrInterPredParams.useRefCloudIndex) {
           attrInterPredParams.refIndexCloud = &(_refFrameAlt->cloud);
           auto& indices = attrInterPredParams.refPointCloudIndices;
           indices.resize(attrInterPredParams.refIndexCloud->getPointCount());
@@ -1184,7 +1187,7 @@ PCCTMC3Decoder3::decodeAttributeBrick(const PayloadBuffer& buf)
         if (
           (minPos_shift[0] || minPos_shift[1] || minPos_shift[2])
           && attr_aps.attr_encoding == AttributeEncoding::kRAHTransform) {
-          if (AttributeInterPredParams::useRefCloudIndex)
+          if (attrInterPredParams.useRefCloudIndex)
             offsetAndScaleShift(
               minPos_shift, attr_aps.attr_coord_scale,
               attrInterPredParams.refIndexCloud,
@@ -1230,7 +1233,7 @@ PCCTMC3Decoder3::decodeAttributeBrick(const PayloadBuffer& buf)
     if (attr_aps.attr_encoding != AttributeEncoding::kRAHTransform)
       if (_refFrameAlt) {
         Box3<int> currentFrameBox = _currentPointCloud.computeBoundingBox();
-        if (AttributeInterPredParams::useRefCloudIndex) {
+        if (attrInterPredParams.useRefCloudIndex) {
           attrInterPredParams.refIndexCloud = &(_refFrameAlt->cloud);
           auto& indices = attrInterPredParams.refPointCloudIndices;
           indices.resize(attrInterPredParams.refIndexCloud->getPointCount());

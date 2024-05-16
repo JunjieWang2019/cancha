@@ -334,7 +334,7 @@ struct AttributeInterPredParamsForRAHT {
 struct AttributeInterPredParams {
   PCCPointSet3 referencePointCloud;
   PCCPointSet3* refIndexCloud = nullptr;
-  static const bool useRefCloudIndex = true;
+  bool useRefCloudIndex = false;
   std::vector<int> refPointCloudIndices;
   int frameDistance;
   bool enableAttrInterPred;
@@ -729,7 +729,7 @@ struct PCCPredictor {
       const PCCPointSet3& refCloud = attrInterPredParams.referencePointCloud;
       const auto refIdxCloud = attrInterPredParams.refIndexCloud;
       const auto& indices = attrInterPredParams.refPointCloudIndices;
-      const bool s = AttributeInterPredParams::useRefCloudIndex;
+      const bool s = attrInterPredParams.useRefCloudIndex;
       neigh0Pos = neighbors[0].interFrameRef
         ? (s ? (*refIdxCloud)[indices[neighIdx[0]]] : refCloud[neighIdx[0]])
         : cloud[neighIdx[0]];
@@ -3010,17 +3010,17 @@ buildPredictorsFast(
   numberOfPointsPerLevelOfDetail.reserve(21);
   numberOfPointsPerLevelOfDetail.push_back(pointCount);
 
-  const auto& referencePointCloud = AttributeInterPredParams::useRefCloudIndex
+  const auto& referencePointCloud = attrInterPredParams.useRefCloudIndex
     ? *(attrInterPredParams.refIndexCloud)
     : attrInterPredParams.referencePointCloud;
-  const int32_t pointCountRef = AttributeInterPredParams::useRefCloudIndex
+  const int32_t pointCountRef = attrInterPredParams.useRefCloudIndex
     ? attrInterPredParams.getPointCount()
     : int32_t(referencePointCloud.getPointCount());
   std::vector<MortonCodeWithIndex> packedVoxelRef = {};
   int32_t startIndexRef = 0, endIndexRef = 0;
   if (interRef) {
     assert(pointCountRef);
-    if (AttributeInterPredParams::useRefCloudIndex) {
+    if (attrInterPredParams.useRefCloudIndex) {
       computeMortonCodesUnsorted(
         referencePointCloud, attrInterPredParams.refPointCloudIndices,
         aps.lodNeighBias, packedVoxelRef);

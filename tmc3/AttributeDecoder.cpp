@@ -725,7 +725,7 @@ AttributeDecoder::decodeReflectancesRaht(
     attrInterPredParams.paramsForInterRAHT.voxelCount = voxelCount_ref;
     std::vector<MortonCodeWithIndex> packedVoxel_ref(voxelCount_ref);
     for (int n = 0; n < voxelCount_ref; n++) {
-      if (AttributeInterPredParams::useRefCloudIndex) {
+      if (attrInterPredParams.useRefCloudIndex) {
         const int idx = attrInterPredParams.refPointCloudIndices[n];
         packedVoxel_ref[n].mortonCode =
           mortonAddr((*attrInterPredParams.refIndexCloud)[idx]);
