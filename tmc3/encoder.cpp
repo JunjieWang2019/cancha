@@ -1461,7 +1461,8 @@ PCCTMC3Encoder3::compressPartition(
           }
           indices.resize(ctr);
         } else {
-          //attrInterPredParams.referencePointCloud = _refFrameAlt.cloud;
+          if (attr_aps.spherical_coord_flag)
+            attrInterPredParams.referencePointCloud = _refFrameAlt.cloud;
           int count = 0;
           auto& cloudTmp = attrInterPredParams.referencePointCloud;
           for (int i = 0; i < attrInterPredParams.getPointCount(); i++) {
