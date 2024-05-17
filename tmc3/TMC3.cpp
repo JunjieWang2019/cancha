@@ -1514,6 +1514,10 @@ ParseParameters(int argc, char* argv[], Parameters& params)
      params_attr.aps.raht_enable_code_layer, true,
     "Type of inter prediction for RAHT")
 
+  ("rahtEnableIntraPredCodeLayer",
+    params_attr.aps.rahtPredParams.raht_enable_intraPred_nonPred_code_layer, true,
+    "Type of RDO select transform or intra prediction for RAHT layer")
+
   ("attrInterPredTranslationThresh", 
     params.encoder.attrInterPredTranslationThreshold, 1000., 
     "Maximum translation threshold used to disable attr inter prediction")
@@ -2035,6 +2039,8 @@ sanitizeEncoderOpts(
       if (attr_aps.raht_enable_code_layer)
         attr_aps.raht_inter_prediction_depth_minus1 =
         max(15, attr_aps.raht_inter_prediction_depth_minus1);
+
+      attr_aps.last_component_prediction_enabled_flag = false;
     }
 
     if (it.first == "color") {

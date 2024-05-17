@@ -45,6 +45,169 @@
 
 namespace pcc {
 
+class ModeCoder
+{
+protected:
+  bool enableInter;
+  bool enableIntra;
+  bool enableFilter;
+  int filterIdx;
+  int maxInterPredDepth;
+  AdaptiveBitModel ctxInterPred;
+  AdaptiveBitModel ctxIntraPred;
+  AdaptiveBitModel ctxRAHTFiltersIsZero;
+  AdaptiveBitModel ctxRAHTFiltersSign;
+  AdaptiveBitModel ctxRAHTFilters;
+public:
+  ModeCoder() : enableInter(0), enableIntra(0), enableFilter(0), filterIdx(0), maxInterPredDepth(15) { reset(); }
+  void reset()
+  {
+    ctxInterPred.probability = 0x8000;
+    ctxIntraPred.probability = 0x8000;
+    ctxRAHTFilters.probability = 0x8000;
+  }
+  void setInterIntraEnabled(bool flag, bool flag2, int flag3, const int idx,const int& depth) { 
+    enableInter = flag; 
+    enableIntra = flag2; 
+    enableFilter = flag3; 
+    enableFilter &= enableInter;
+    filterIdx = idx;
+    maxInterPredDepth = depth;
+  }
+  void updateInterIntraEnabled(bool flag, bool flag2, int flag3) {
+
+  }
+  int decodeFilter() { throw std::runtime_error("not implemented"); }
+  int decodeMode(const bool& enableInter, const bool& enableIntra) { throw std::runtime_error("not implemented"); }
+  void _encodeMode(int predMode, const bool& enableInter, const bool& enableIntra,const bool& code = true) {
+    throw std::runtime_error("not implemented");
+  }
+  void _encodeFilter(int64_t predMode, const bool& code = true) { throw std::runtime_error("not implemented"); }
+};
+
+class ModeEncoder: public ModeCoder 
+{
+  typedef decltype(AdaptiveBitModel::probability) probaType;
+  EntropyEncoder* arith;
+  std::deque<int> modeBuffer;
+  std::deque<bool> curLayerEnableInter;
+  std::deque<bool> curLayerEnableIntra;
+  std::deque<int64_t> filterBuffer;
+public:
+  void set(EntropyEncoder* coder) {
+    arith = coder;
+    modeBuffer.resize(0);
+    filterBuffer.resize(0);
+    curLayerEnableInter.resize(0);
+    curLayerEnableIntra.resize(0);
+  }
+  ModeEncoder()
+    : ModeCoder()
+    , arith(nullptr)
+  {
+    
+  }
+  ~ModeEncoder() { if (arith) flush(); }
+  void flush()
+  {
+    int rahtFilterLayerIdx = 0;
+    for (int depth = 0; depth < modeBuffer.size(); ++depth) {
+      _encodeMode(modeBuffer[depth], curLayerEnableInter[depth], curLayerEnableIntra[depth], true);
+      if (curLayerEnableInter[depth] && (depth >= filterIdx && depth < maxInterPredDepth) && enableFilter && modeBuffer[depth] == 1) {
+        _encodeFilter(filterBuffer[rahtFilterLayerIdx++], true);
+      }
+    }
+    modeBuffer.clear();
+    filterBuffer.clear();
+    curLayerEnableInter.clear();
+    curLayerEnableIntra.clear();
+  }
+  
+  void _encodeMode(int predMode,const bool& enableInter,const bool& enableIntra,const bool& writeOut = false)
+  {
+    if (!writeOut) {
+      modeBuffer.push_back(predMode);
+      curLayerEnableInter.push_back(enableInter);
+      curLayerEnableIntra.push_back(enableIntra);
+    }
+    else {
+      if (enableInter) {
+        const bool& isInter = predMode == 1;
+        arith->encode(isInter, ctxInterPred);
+        if (enableIntra && !isInter) {
+          const bool& isIntraPred = predMode == 0;
+          arith->encode(isIntraPred, ctxIntraPred);
+        }
+      }
+      else if (enableIntra) {
+        const bool& isIntraPredMode = predMode == 0;
+        arith->encode(isIntraPredMode, ctxIntraPred);
+      }
+    }
+  }
+
+  void _encodeFilter(int64_t currenttap, const bool& writeOut = false)
+  {
+    if (!writeOut) {
+      filterBuffer.push_back(currenttap);
+    }
+    else {
+      bool sign = currenttap > 0;
+      currenttap = uint32_t(::llabs(currenttap)) << 1;
+      currenttap = currenttap - sign;
+      arith->encodeExpGolomb(currenttap, 2, ctxRAHTFilters);
+    }
+  }
+
+};
+
+
+class ModeDecoder : public ModeCoder {
+  EntropyDecoder* arith;
+
+public:
+  ModeDecoder() : ModeCoder(), arith(nullptr) {}
+
+  void set(EntropyDecoder* coder) { arith = coder; }
+
+  int decodeMode(const bool& enableInter, const bool& enableIntra)
+  {
+    if (enableInter) {
+      bool isInter;
+      isInter = arith->decode(ctxInterPred);
+      if (isInter)
+        return 1;
+      if (!enableIntra)
+        return 0;
+      bool isIntraPred = arith->decode(ctxIntraPred);
+      if (isIntraPred)
+        return 0;
+      return 2;
+    }
+    else if (enableIntra) {
+      bool isIntraPred = arith->decode(ctxIntraPred);
+      if (isIntraPred)
+        return 0;
+      return 1;
+    }
+  }
+  int decodeFilter()
+  {
+   /* const bool isZero = arith->decode(ctxRAHTFiltersIsZero);
+    if (isZero)
+      return 0;
+    const bool sign = arith->decode(ctxRAHTFiltersSign);
+    uint32_t value = arith->decodeExpGolomb(2, ctxRAHTFilters) + 1;
+    return sign ? value : -value;*/
+    uint32_t value = arith->decodeExpGolomb(2, ctxRAHTFilters);
+    bool sign = value & 1;
+    value = (value + sign) >> 1;
+    return sign ? value : -value;
+  }
+};
+
+  
+
 void regionAdaptiveHierarchicalTransform(
   const RahtPredictionParams& rahtPredParams,
   const QpSet& qpset,
@@ -55,7 +218,8 @@ void regionAdaptiveHierarchicalTransform(
   const int voxelCount,
   int* coefficients,
   const bool removeRoundingOps,
-  AttributeInterPredParams& attrInterPredParam);
+  AttributeInterPredParams& attrInterPredParam,
+  ModeEncoder& encoder);
 
 void regionAdaptiveHierarchicalInverseTransform(
   const RahtPredictionParams &rahtPredParams,
@@ -67,7 +231,8 @@ void regionAdaptiveHierarchicalInverseTransform(
   const int voxelCount,
   int* coefficients,
   const bool removeRoundingOps,
-  AttributeInterPredParams& attrInterPredParams);
+  AttributeInterPredParams& attrInterPredParams,
+  ModeDecoder& decoder);
 
 struct PCCRAHTACCoefficientEntropyEstimate {
   PCCRAHTACCoefficientEntropyEstimate()
@@ -97,12 +262,16 @@ private:
 
 
 struct PCCRAHTComputeLCP {
-  int8_t computeLastComponentPredictionCoeff(int m, int64_t coeffs[][3]);
+  int8_t computeLastComponentPredictionCoeff(const bool& enableNonPred, int m, int64_t coeffs[][3], int64_t nonPredCoeffs[][3], int8_t& nonPredLcp);
 
 private:
   int64_t sumk1k2 = 0;
   int64_t sumk1k1 = 0;
+  int64_t nonPredSumk1k2 = 0;
+  int64_t nonPredSumk1k1 = 0;
   std::queue<int64_t> window1;
   std::queue<int64_t> window2;
+  std::queue<int64_t> nonPredWindow1;
+  std::queue<int64_t> nonPredWindow2;
 };
 } /* namespace pcc */

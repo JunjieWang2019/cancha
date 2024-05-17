@@ -43,6 +43,7 @@
 #include "PCCTMC3Common.h"
 #include "entropy.h"
 #include "AttributeCommon.h"
+#include "RAHT.h"
 
 namespace pcc {
 
@@ -68,7 +69,8 @@ public:
     AttributeContexts& ctxtMem,
     PCCPointSet3& pointCloud,
     AttributeInterPredParams& attrInterPredParams,
-    AttributeGranularitySlicingParam& slicingParam) = 0;
+    AttributeGranularitySlicingParam& slicingParam,
+    ModeDecoder& decoder) = 0;
 
   // Indicates if the attribute decoder can decode the given aps
   virtual bool isReusable(
@@ -99,7 +101,8 @@ public:
     PCCPointSet3& pointCloud,
     PayloadBuffer* payload,
     AttributeInterPredParams &attrInterPredParams,
-    AttributeGranularitySlicingParam& slicingParam) = 0;
+    AttributeGranularitySlicingParam& slicingParam,
+    ModeEncoder& predEncoder) = 0;
 
   // Indicates if the attribute decoder can decode the given aps
   virtual bool isReusable(

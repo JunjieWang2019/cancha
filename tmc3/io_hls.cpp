@@ -1173,6 +1173,7 @@ write(const SequenceParameterSet& sps, const AttributeParameterSet& aps)
         for (int i = 0; i < 5; i++) 
           bs.writeUe(aps.rahtPredParams.raht_prediction_weights[i]);
       bs.writeUe(aps.rahtPredParams.raht_prediction_search_range);
+      bs.write(aps.rahtPredParams.raht_enable_intraPred_nonPred_code_layer);
     }
 
     if (aps.attr_encoding == AttributeEncoding::kRAHTransform)
@@ -1311,6 +1312,7 @@ parseAps(const PayloadBuffer& buf, const SequenceParameterSet& sps)
   aps.raht_send_inter_filters = false;
   aps.raht_inter_skip_layers = 0;
   aps.predictionWithDistributionEnabled = false;
+  aps.rahtPredParams.raht_enable_intraPred_nonPred_code_layer = false;
   if (aps_extension_flag) {
     if (aps.attr_encoding == AttributeEncoding::kRAHTransform) {
       bs.read(&aps.rahtPredParams.integer_haar_enable_flag);
@@ -1358,6 +1360,7 @@ parseAps(const PayloadBuffer& buf, const SequenceParameterSet& sps)
         aps.rahtPredParams.setPredictionWeights();
       }
       bs.readUe(&aps.rahtPredParams.raht_prediction_search_range);
+      bs.read(&aps.rahtPredParams.raht_enable_intraPred_nonPred_code_layer);
     }
 
     if (aps.attr_encoding == AttributeEncoding::kRAHTransform)
@@ -2308,7 +2311,7 @@ write(
       bs.write(abh.disableAttrInterPredForRefFrame2);
     }
       
-    if (
+    /*if (
       aps.raht_enable_code_layer && abh.enableAttrInterPred
       && aps.attr_encoding == AttributeEncoding::kRAHTransform) {
       int numDepth = abh.raht_attr_layer_code_mode.size();
@@ -2338,7 +2341,7 @@ write(
         int currenttap = abh.RAHTFilterTaps[filteridx];
         bs.writeSe(currenttap);
       }
-    }
+    }*/
     
   }
 
@@ -2494,41 +2497,41 @@ parseAbh(
     if (abh.geomEnableBiInterPred)
       bs.read(&abh.disableAttrInterPredForRefFrame2);
     
-    if (
-      aps.raht_enable_code_layer && abh.enableAttrInterPred
-      && aps.attr_encoding == AttributeEncoding::kRAHTransform) {
-      int numDepth = 0;
-      bs.readUe(&numDepth);
-      abh.raht_attr_layer_code_mode.resize(numDepth);
-      for (int depth = 0; depth < numDepth; ++depth)
-        bs.read(&abh.raht_attr_layer_code_mode[depth]);
-      
-      if(aps.raht_send_inter_filters) {
-        int numFilters = numDepth +1 - aps.raht_inter_skip_layers;
-        //bs.readUe(&numFilters);
-        int aclayeridx = aps.raht_inter_skip_layers-1;
-        abh.RAHTFilterTaps.resize(numFilters);
-        for (int i = 0; i < numFilters; i++) {
-          if ((i == 0) && (aps.raht_inter_skip_layers == 0))
-            bs.readSe(&abh.RAHTFilterTaps[i]);
-          else if(abh.raht_attr_layer_code_mode[aclayeridx])
-          {
-            bs.readSe(&abh.RAHTFilterTaps[i]);
-          }
-          aclayeridx++;
-        }
-      }
-    }
-    else if (abh.enableAttrInterPred) {
-      if(aps.raht_send_inter_filters) {
-        int numFilters = 0;
-        bs.readUe(&numFilters);
-        abh.RAHTFilterTaps.resize(numFilters);
-        for (int i = 0; i < numFilters; i++) {
-          bs.readSe(&abh.RAHTFilterTaps[i]);
-        }
-      }
-    }
+    //if (
+    //  aps.raht_enable_code_layer && abh.enableAttrInterPred
+    //  && aps.attr_encoding == AttributeEncoding::kRAHTransform) {
+    //  int numDepth = 0;
+    //  bs.readUe(&numDepth);
+    //  abh.raht_attr_layer_code_mode.resize(numDepth);
+    //  for (int depth = 0; depth < numDepth; ++depth)
+    //    bs.read(&abh.raht_attr_layer_code_mode[depth]);
+    //  
+    //  if(aps.raht_send_inter_filters) {
+    //    int numFilters = numDepth +1 - aps.raht_inter_skip_layers;
+    //    //bs.readUe(&numFilters);
+    //    int aclayeridx = aps.raht_inter_skip_layers-1;
+    //    abh.RAHTFilterTaps.resize(numFilters);
+    //    for (int i = 0; i < numFilters; i++) {
+    //      if ((i == 0) && (aps.raht_inter_skip_layers == 0))
+    //        bs.readSe(&abh.RAHTFilterTaps[i]);
+    //      else if(abh.raht_attr_layer_code_mode[aclayeridx])
+    //      {
+    //        bs.readSe(&abh.RAHTFilterTaps[i]);
+    //      }
+    //      aclayeridx++;
+    //    }
+    //  }
+    //}
+    //else if (abh.enableAttrInterPred) {
+    //  if(aps.raht_send_inter_filters) {
+    //    int numFilters = 0;
+    //    bs.readUe(&numFilters);
+    //    abh.RAHTFilterTaps.resize(numFilters);
+    //    for (int i = 0; i < numFilters; i++) {
+    //      bs.readSe(&abh.RAHTFilterTaps[i]);
+    //    }
+    //  }
+    //}
   }
 
  

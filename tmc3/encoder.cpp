@@ -1484,7 +1484,7 @@ PCCTMC3Encoder3::compressPartition(
     AttributeGranularitySlicingParam slicingParam;
     auto& ctxtMemAttr = _ctxtMemAttrs.at(abh.attr_sps_attr_idx);
     attrEncoder->encode(
-      *_sps, attr_sps, attr_aps, abh, ctxtMemAttr, pointCloud, &payload, attrInterPredParams,slicingParam);
+      *_sps, attr_sps, attr_aps, abh, ctxtMemAttr, pointCloud, &payload, attrInterPredParams,slicingParam, predCoder);
 
     if (reconCloudAlt && attr_aps.spherical_coord_flag && _gps->predgeom_enabled_flag)
       reconCloudAlt->cloud.append(pointCloud, _posSph);
@@ -1697,7 +1697,7 @@ PCCTMC3Encoder3::compressPartition(
               *_sps, attr_sps, attr_aps, abh, 
             *_gHandler._ctxtMemAttrsSaved[attrIdx][curArrayIdx], _subgroupPointCloud[groupIndex][subgroupIndex], 
             &payload,
-            attrInterPredParams, slicingParam);            
+            attrInterPredParams, slicingParam, predCoder);            
 
         }
         else
@@ -1720,7 +1720,7 @@ PCCTMC3Encoder3::compressPartition(
 			      *_gHandler._ctxtMemAttrsSaved[attrIdx][0],
 			      _subgroupPointCloud[groupIndex][subgroupIndex],
 			      &payload,
-			      attrInterPredParams,slicingParam);     
+			      attrInterPredParams,slicingParam, predCoder);     
         }
         
         if(_subgroupPointCloud[groupIndex][subgroupIndex].getPointCount()>0)

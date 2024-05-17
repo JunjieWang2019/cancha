@@ -42,7 +42,7 @@
 #include "PayloadBuffer.h"
 #include "PCCTMC3Common.h"
 #include "quantization.h"
-
+#include "RAHT.h"
 namespace pcc {
 
 //============================================================================
@@ -66,7 +66,8 @@ public:
     AttributeContexts& ctxtMem,
     PCCPointSet3& pointCloud, 
     AttributeInterPredParams& attrInterPredParams,
-    AttributeGranularitySlicingParam &slicingParam) override;
+    AttributeGranularitySlicingParam &slicingParam,
+    ModeDecoder& decoder) override;
 
   bool isReusable(
     const AttributeParameterSet& aps,
@@ -127,7 +128,8 @@ protected:
     const QpSet& qpSet,
     PCCResidualsDecoder& decoder,
     PCCPointSet3& pointCloud,
-    AttributeInterPredParams& attrInterPredParams);
+    AttributeInterPredParams& attrInterPredParams,
+    ModeDecoder& predDecoder);
 
   void decodeColorsRaht(
     const AttributeDescription& desc,
@@ -135,7 +137,8 @@ protected:
     const QpSet& qpSet,
     PCCResidualsDecoder& decoder,
     PCCPointSet3& pointCloud,
-    AttributeInterPredParams& attrInterPredParams);
+    AttributeInterPredParams& attrInterPredParams,
+    ModeDecoder& predDecoder);
 
   static void decodePredModeColor(
     const AttributeParameterSet& aps,

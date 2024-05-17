@@ -464,6 +464,7 @@ struct RahtPredictionParams {
   bool raht_subnode_prediction_enabled_flag;
   int raht_prediction_search_range;
   bool raht_last_component_prediction_enabled_flag;
+  bool raht_enable_intraPred_nonPred_code_layer;
   std::vector<int> raht_prediction_weights;
 
   std::vector<int> predWeightParent;

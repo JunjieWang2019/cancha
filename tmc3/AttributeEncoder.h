@@ -44,6 +44,7 @@
 #include "PCCTMC3Common.h"
 #include "hls.h"
 #include "quantization.h"
+#include "RAHT.h"
 
 namespace pcc {
 
@@ -66,7 +67,8 @@ public:
     PCCPointSet3& pointCloud,
     PayloadBuffer* payload,
     AttributeInterPredParams &attrInterPredParams,
-    AttributeGranularitySlicingParam &slicingParam) override;
+    AttributeGranularitySlicingParam &slicingParam,
+    ModeEncoder& predEncoder) override;
 
   bool isReusable(
     const AttributeParameterSet& aps,
@@ -119,7 +121,8 @@ protected:
     const QpSet& qpSet,
     PCCPointSet3& pointCloud,
     PCCResidualsEncoder& encoder,
-    AttributeInterPredParams& attrInterPredParams);
+    AttributeInterPredParams& attrInterPredParams,
+    ModeEncoder& predEncoder);
 
   void encodeColorsTransformRaht(
     const AttributeDescription& desc,
@@ -127,7 +130,8 @@ protected:
     const QpSet& qpSet,
     PCCPointSet3& pointCloud,
     PCCResidualsEncoder& encoder,
-    AttributeInterPredParams& attrInterPredParams);
+    AttributeInterPredParams& attrInterPredParams,
+    ModeEncoder& predEncoder);
 
   static Vec3<int64_t> computeColorResiduals(
     const AttributeParameterSet& aps,

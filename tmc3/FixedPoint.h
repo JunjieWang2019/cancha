@@ -50,7 +50,7 @@ public:
   // Fixed point value
   int64_t val;
 
-  FixedPoint() = default;
+  FixedPoint() :val(0) {};
   FixedPoint(const FixedPoint&) = default;
   FixedPoint(FixedPoint&&) = default;
   FixedPoint& operator=(const FixedPoint&) = default;

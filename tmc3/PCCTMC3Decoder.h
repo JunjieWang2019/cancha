@@ -49,6 +49,7 @@
 #include "geometry_octree.h"
 #include "ringbuf.h"
 #include "layerGroupSlicing.h"
+#include "RAHT.h"
 
 namespace pcc {
 
@@ -129,6 +130,7 @@ private:
 private:
   // Decoder specific parameters
   DecoderParams _params;
+  ModeDecoder predDecoder;
 
   // Indicates that pointcloud output should be suppressed at a frame boundary
   bool _suppressOutput;

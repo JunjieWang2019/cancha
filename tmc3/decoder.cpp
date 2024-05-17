@@ -1086,9 +1086,9 @@ PCCTMC3Decoder3::decodeAttributeBrick(const PayloadBuffer& buf)
   attrInterPredParams.paramsForInterRAHT.enableFilterEstimation = attr_aps.raht_send_inter_filters;
   attrInterPredParams.paramsForInterRAHT.skipInitLayersForFiltering = attr_aps.raht_inter_skip_layers;
   attrInterPredParams.paramsForInterRAHT.FilterTaps.clear();
-  if (attr_aps.raht_send_inter_filters && abh.enableAttrInterPred) {
+  /*if (attr_aps.raht_send_inter_filters && abh.enableAttrInterPred) {
     attrInterPredParams.paramsForInterRAHT.FilterTaps = abh.RAHTFilterTaps;
-  }
+  }*/
 
   attrInterPredParams.paramsForInterRAHT.raht_enable_inter_intra_layer_RDO =
     attr_aps.raht_enable_code_layer;
@@ -1150,7 +1150,7 @@ PCCTMC3Decoder3::decodeAttributeBrick(const PayloadBuffer& buf)
       _gHandler.getMinNodeSize(abh.attr_sps_attr_idx, 0), buf.data() + abhSize, buf.size() - abhSize,
       *_gHandler._ctxtMemAttrsSaved[abh.attr_sps_attr_idx][curArrayIdx], 
       _subgroupPointCloud[curArrayIdx],
-      attrInterPredParams,slicingParam);
+      attrInterPredParams,slicingParam, predDecoder);
     
     _abh[abh.attr_sps_attr_idx] = abh;
     _prevArrayIdx = curArrayIdx;
@@ -1279,8 +1279,7 @@ PCCTMC3Decoder3::decodeAttributeBrick(const PayloadBuffer& buf)
   _attrDecoder->decode(
     *_sps, attr_sps, attr_aps, abh, _gbh.footer.geom_num_points_minus1,
     _params.minGeomNodeSizeLog2, buf.data() + abhSize, buf.size() - abhSize,
-    ctxtMemAttr, _currentPointCloud
-    , attrInterPredParams,slicingParam);
+    ctxtMemAttr, _currentPointCloud, attrInterPredParams, slicingParam, predDecoder);
 
   if (attr_aps.spherical_coord_flag && _gps->predgeom_enabled_flag)
     _accumCloudAltPositions.append(_currentPointCloud, _posSph);
@@ -1422,7 +1421,7 @@ PCCTMC3Decoder3::decodeDependentAttributeBrick(const PayloadBuffer& buf)
     _gHandler.getMinNodeSize(abh.attr_sps_attr_idx,dep_abh.layer_group_id), 
     buf.data() + abhSize, buf.size() - abhSize,
     *_gHandler._ctxtMemAttrsSaved[abh.attr_sps_attr_idx][curArrayIdx], tmpPoints,
-    attrInterPredParams,slicingParam);
+    attrInterPredParams,slicingParam, predDecoder);
     
 
   

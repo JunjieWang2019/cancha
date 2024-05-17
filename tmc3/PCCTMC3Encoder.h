@@ -52,6 +52,7 @@
 #include "pointset_processing.h"
 #include "TMC3.h"
 #include "layerGroupSlicing.h"
+#include "RAHT.h"
 namespace pcc {
 
 //============================================================================
@@ -253,6 +254,7 @@ private:
   SrcMappedPointSet quantization(const PCCPointSet3& src);
 
 private:
+  ModeEncoder predCoder;
   PCCPointSet3 pointCloud;
   PCCPointSet3 pointCloudPadding;
 
