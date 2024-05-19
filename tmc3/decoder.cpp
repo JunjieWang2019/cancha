@@ -1086,13 +1086,12 @@ PCCTMC3Decoder3::decodeAttributeBrick(const PayloadBuffer& buf)
   attrInterPredParams.paramsForInterRAHT.enableFilterEstimation = attr_aps.raht_send_inter_filters;
   attrInterPredParams.paramsForInterRAHT.skipInitLayersForFiltering = attr_aps.raht_inter_skip_layers;
   attrInterPredParams.paramsForInterRAHT.FilterTaps.clear();
-  /*if (attr_aps.raht_send_inter_filters && abh.enableAttrInterPred) {
+  if (attr_aps.raht_send_inter_filters && abh.enableAttrInterPred) {
     attrInterPredParams.paramsForInterRAHT.FilterTaps = abh.RAHTFilterTaps;
-  }*/
+  }
 
   attrInterPredParams.paramsForInterRAHT.raht_enable_inter_intra_layer_RDO =
     attr_aps.raht_enable_code_layer;
-  attrInterPredParams.attr_layer_code_mode = abh.raht_attr_layer_code_mode;
   
   if (attr_aps.spherical_coord_flag && _gps->predgeom_enabled_flag && !_gps->biPredictionEnabledFlag)
     attrInterPredParams.useRefCloudIndex = true;

@@ -582,7 +582,6 @@ AttributeEncoder::encode(
     case AttributeEncoding::kRAHTransform:
       encodeReflectancesTransformRaht(
         desc, attr_aps, qpSet, pointCloud, encoder, attrInterPredParams,predEncoder);
-      abh.raht_attr_layer_code_mode = attrInterPredParams.attr_layer_code_mode;
       break;
 
     case AttributeEncoding::kPredictingTransform:{
@@ -661,7 +660,6 @@ AttributeEncoder::encode(
     case AttributeEncoding::kRAHTransform:
       encodeColorsTransformRaht(
         desc, attr_aps, qpSet, pointCloud, encoder, attrInterPredParams,predEncoder);
-      abh.raht_attr_layer_code_mode = attrInterPredParams.attr_layer_code_mode;
       break;
 
     case AttributeEncoding::kPredictingTransform:
@@ -691,10 +689,10 @@ AttributeEncoder::encode(
     attrInterPredParams.enableAttrInterPred = false;
   }
 
-  /*abh.RAHTFilterTaps.clear();
+  abh.RAHTFilterTaps.clear();
   for (int filteridx = 0; filteridx < attrInterPredParams.paramsForInterRAHT.FilterTaps.size(); filteridx++) {
     abh.RAHTFilterTaps.push_back(attrInterPredParams.paramsForInterRAHT.FilterTaps[filteridx]);
-  }*/
+  }
   // write abh
   if(slicingParam.is_dependent_unit){
       write(sps, attr_aps, *slicingParam.buf.abh_dep, payload);
