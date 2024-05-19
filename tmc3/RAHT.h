@@ -189,7 +189,9 @@ public:
       if (isIntraPred)
         return 0;
       return 1;
-    }
+    } 
+	else
+      return -1;
   }
   int decodeFilter()
   {
