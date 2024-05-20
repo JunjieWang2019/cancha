@@ -67,6 +67,19 @@ categories:
        - !conditional '${numLasers}'
        - spherical_coord_flag: 1
 
+     -
+       - !conditional '"${group}" eq "solid"'
+       - rahtEnableIntraPredCodeLayer: 0
+     -
+       - !conditional '"${group}" eq "dense"'
+       - rahtEnableIntraPredCodeLayer: 0
+     -
+       - !conditional '"${group}" eq "sparse"'
+       - rahtEnableIntraPredCodeLayer: 0
+     -
+       - !conditional '"${group}" eq "scant"'
+       - rahtEnableIntraPredCodeLayer: 0
+       
      ##
      # attribute coding -- reflectance
      -

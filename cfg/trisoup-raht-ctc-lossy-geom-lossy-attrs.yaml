@@ -51,6 +51,18 @@ categories:
      #  - use raht
      - convertPlyColourspace: 1
      - transformType: 0
+     -
+       - !conditional '"${group}" eq "solid"'
+       - rahtEnableIntraPredCodeLayer: 0
+     -
+       - !conditional '"${group}" eq "dense"'
+       - rahtEnableIntraPredCodeLayer: 0
+     -
+       - !conditional '"${group}" eq "sparse"'
+       - rahtEnableIntraPredCodeLayer: 0
+     -
+       - !conditional '"${group}" eq "scant"'
+       - rahtEnableIntraPredCodeLayer: 0
 
      ##
      # attribute coding -- colour
