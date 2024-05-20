@@ -1439,8 +1439,8 @@ uraht_process(
       coeffBufItK[2],
     };
 
-    bool curLevelEnableACInterPred = enableACInterPred;
-    bool curLevelEnableACIntraPred = enablePredictionInLvl;
+    bool curLevelEnableACInterPred = false;
+    bool curLevelEnableACIntraPred = false;
     int predMode = 0;
     if (enableRDOCodingLayer) {
       if (!isEncoder) {
@@ -1458,7 +1458,11 @@ uraht_process(
         else if (enableACRDONonPred) {
           curLevelEnableACIntraPred = predMode == 0; // 0: intraPred 1:nonPred
         }
-      }
+      } 
+	  else {
+        curLevelEnableACInterPred = enableACRDOInterPred;
+        curLevelEnableACIntraPred = enableACRDONonPred;
+	  }
     }
     
 
