@@ -1254,7 +1254,7 @@ PCCTMC3Decoder3::decodeAttributeBrick(const PayloadBuffer& buf)
           }
           indices.resize(ctr);
         } else {
-          if (attr_aps.spherical_coord_flag)
+          if (attr_aps.spherical_coord_flag && !_gps->biPredictionEnabledFlag)
             attrInterPredParams.referencePointCloud = _refFrameAlt->cloud;
           int count = 0;
           auto& cloudTmp = attrInterPredParams.referencePointCloud;
