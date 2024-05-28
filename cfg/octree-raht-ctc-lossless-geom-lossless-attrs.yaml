@@ -48,6 +48,10 @@ categories:
      -
        - !conditional '"${group}" eq "dense"'
        - planarEnabled: '${enablePlanar}'
+     -
+       - !conditional '"${group}" =~ m{^cat2}'
+       - planarEnabled: '${enablePlanar}'
+       
      - planarModeIdcmUse: 0
      -
        - !conditional '"${group}" eq "cat3-frame"'
@@ -187,3 +191,12 @@ categories:
       staue_klimt_vox20:                 { enablePlanar: 1 }
       ulb_unicorn_hires_vox20:           { enablePlanar: 1 }
       ulb_unicorn_vox20:                 { enablePlanar: 1 }
+
+      # cat2
+      8ivfbv2_longdress_vox10:           { enablePlanar: 0 }
+      8ivfbv2_loot_vox10:                { enablePlanar: 0 }
+      8ivfbv2_redandblack_vox10:         { enablePlanar: 0 }
+      8ivfbv2_soldier_vox10:             { enablePlanar: 0 }
+      basketball_player_vox11:           { enablePlanar: 0 }
+      dancer_player_vox11:               { enablePlanar: 0 }
+      queen:                             { enablePlanar: 0 }

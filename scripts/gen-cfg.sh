@@ -135,6 +135,7 @@ do_one_cfgset() {
 		--prefix="$outdir" --no-skip-sequences-without-src \
 		"${!cfgset/#/${src_cfg_dir}}" \
 		"${seq_src_cfg_dir}sequences-cat1.yaml" \
+		"${seq_src_cfg_dir}sequences-cat2.yaml" \
 		"${seq_src_cfg_dir}sequences-cat3.yaml" \
 		"${extra_args[@]}"
 

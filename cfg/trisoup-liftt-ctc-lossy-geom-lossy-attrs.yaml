@@ -24,6 +24,10 @@ categories:
      -
        - !conditional '"${group}" eq "dense"'
        - planarEnabled: '${enablePlanar}'
+     -
+       - !conditional '"${group}" =~ m{^cat2}'
+       - planarEnabled: '${enablePlanar}'
+       
      - planarModeIdcmUse: 0
      - positionQuantizationScale: '$eval{ 1 / (1 << ( ${src-geometry-precision} - ${test-depth} )) }'
      - trisoupNodeSizeLog2:
@@ -44,6 +48,10 @@ categories:
          r04: 0
      - trisoupFineRayTracingEnabled: 0
      - trisoupImprovedEncoderEnabled: 1
+     -
+       - !conditional '"${group}" =~ m{^cat2}'
+       - safeTrisoupPartionning: 0 # safeTrisoupPartitionning not working properly with cat2
+
 
      ####
      # attribute coding (common options -- relies on option ordering)
@@ -131,3 +139,12 @@ categories:
       staue_klimt_vox20:                 { enablePlanar: 1, test-depth:  9, trisoupNodeSizeLog2-offset: 0 }
       ulb_unicorn_hires_vox20:           { enablePlanar: 1, test-depth: 12, trisoupNodeSizeLog2-offset: 0 }
       ulb_unicorn_vox20:                 { enablePlanar: 1, test-depth: 11, trisoupNodeSizeLog2-offset: 2 }
+
+      # cat2
+      8ivfbv2_longdress_vox10:           { enablePlanar: 0, test-depth: 10, trisoupNodeSizeLog2-offset: 0 }
+      8ivfbv2_loot_vox10:                { enablePlanar: 0, test-depth: 10, trisoupNodeSizeLog2-offset: 0 }
+      8ivfbv2_redandblack_vox10:         { enablePlanar: 0, test-depth: 10, trisoupNodeSizeLog2-offset: 0 }
+      8ivfbv2_soldier_vox10:             { enablePlanar: 0, test-depth: 10, trisoupNodeSizeLog2-offset: 0 }
+      basketball_player_vox11:           { enablePlanar: 0, test-depth: 11, trisoupNodeSizeLog2-offset: 0 }
+      dancer_player_vox11:               { enablePlanar: 0, test-depth: 11, trisoupNodeSizeLog2-offset: 0 }
+      queen:                             { enablePlanar: 0, test-depth: 10, trisoupNodeSizeLog2-offset: 0 }
