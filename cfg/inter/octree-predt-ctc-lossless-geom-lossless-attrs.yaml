@@ -18,6 +18,10 @@ categories:
      - randomAccessPeriod: 32
      - interPredictionEnabled: 1
      - globalMotionEnabled: 1
+     -
+       - !conditional '"${group}" =~ m{^cat2}'
+       - globalMotionEnabled: 0    
+       
      - motionVectorPath: '${global_motion_file}'
 
      ##
@@ -53,6 +57,10 @@ categories:
      -
        - !conditional '"${group}" eq "dense"'
        - planarEnabled: '${enablePlanar}'
+     -
+       - !conditional '"${group}" =~ m{^cat2}'
+       - planarEnabled: 0
+       
      - planarModeIdcmUse: 0
      -
        - !conditional '"${group}" eq "cat3-frame"'
@@ -137,6 +145,15 @@ categories:
      - hausdorff
 
     sequences:
+      # cat2
+      8ivfbv2_longdress_vox10:
+      8ivfbv2_loot_vox10:
+      8ivfbv2_redandblack_vox10:
+      8ivfbv2_soldier_vox10:
+      basketball_player_vox11:
+      dancer_player_vox11:
+      queen:
+
       # cat3
       ford_01_q1mm:
       ford_02_q1mm:
