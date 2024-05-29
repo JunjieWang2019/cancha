@@ -101,6 +101,7 @@ protected:
     int minGeomNodeSizeLog2,
     PCCResidualsDecoder& decoder,
     PCCPointSet3& pointCloud,
+    const AttributeInterPredParams& attrInterPredParams,
     AttributeGranularitySlicingParam &slicingParam);
 
   void decodeReflectancesPred(
@@ -120,6 +121,7 @@ protected:
     const QpSet& qpSet,
     PCCResidualsDecoder& decoder,
     PCCPointSet3& pointCloud,
+    const AttributeInterPredParams& attrInterPredParams,
     AttributeGranularitySlicingParam &slicingParam);
 
   void decodeReflectancesRaht(

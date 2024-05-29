@@ -290,7 +290,8 @@ predModeEligibleColor(
   const AttributeParameterSet& aps,
   const PCCPointSet3& pointCloud,
   const std::vector<uint32_t>& indexes,
-  const PCCPredictor& predictor)
+  const PCCPredictor& predictor,
+  const AttributeInterPredParams& attrInterPredParams)
 {
   if (predictor.neighborCount <= 1 || !aps.max_num_direct_predictors)
     return false;
@@ -298,8 +299,20 @@ predModeEligibleColor(
   Vec3<int64_t> minValue = {0, 0, 0};
   Vec3<int64_t> maxValue = {0, 0, 0};
   for (int i = 0; i < predictor.neighborCount; ++i) {
-    const Vec3<attr_t> colorNeighbor =
-      pointCloud.getColor(indexes[predictor.neighbors[i].predictorIndex]);
+    Vec3<attr_t> colorNeighbor = {0, 0, 0};
+   
+    if (attrInterPredParams.enableAttrInterPred) {
+      if (predictor.neighbors[i].interFrameRef)
+        colorNeighbor =
+          attrInterPredParams.getColor(
+          predictor.neighbors[i].pointIndex);
+      else
+        colorNeighbor = pointCloud.getColor(predictor.neighbors[i].pointIndex);
+    } else {
+      colorNeighbor =
+        pointCloud.getColor(
+        indexes[predictor.neighbors[i].predictorIndex]);
+    }
     for (size_t k = 0; k < 3; ++k) {
       if (i == 0 || colorNeighbor[k] < minValue[k]) {
         minValue[k] = colorNeighbor[k];

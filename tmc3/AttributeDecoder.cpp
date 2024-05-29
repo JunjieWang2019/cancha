@@ -319,13 +319,16 @@ AttributeDecoder::decode(
       break;
 
     case AttributeEncoding::kPredictingTransform:
-      decodeColorsPred(attr_desc, attr_aps, abh, qpSet, decoder, pointCloud,slicingParam);
+      decodeColorsPred(
+        attr_desc, attr_aps, abh, qpSet, decoder, pointCloud,
+        attrInterPredParams, slicingParam);
       break;
 
     case AttributeEncoding::kLiftingTransform:
       decodeColorsLift(
         attr_desc, attr_aps, abh, qpSet, geom_num_points_minus1,
-        minGeomNodeSizeLog2, decoder, pointCloud,slicingParam);
+        minGeomNodeSizeLog2, decoder, pointCloud, attrInterPredParams,
+        slicingParam);
       break;
 
     case AttributeEncoding::kRaw:
@@ -566,6 +569,7 @@ AttributeDecoder::decodeColorsPred(
   const QpSet& qpSet,
   PCCResidualsDecoder& decoder,
   PCCPointSet3& pointCloud,
+  const AttributeInterPredParams& attrInterPredParams,
   AttributeGranularitySlicingParam &slicingParam)
 {
   const size_t pointCount = pointCloud.getPointCount();
@@ -595,7 +599,8 @@ AttributeDecoder::decodeColorsPred(
   std::vector<uint64_t> quantWeights;
   if (!aps.scalable_lifting_enabled_flag) {
     computeQuantizationWeights(
-      _lods.predictors, quantWeights, aps.quant_neigh_weight);
+      _lods.predictors, quantWeights, aps.quant_neigh_weight,
+      attrInterPredParams.enableAttrInterPred);
   } else {
     computeQuantizationWeightsScalable(
       _lods.predictors, _lods.numPointsInLod, pointCount, 0, quantWeights);
@@ -632,7 +637,9 @@ AttributeDecoder::decodeColorsPred(
       decoder.decode(&values[0]);
     
     if(slicingParam.is_dependent_unit && (predictorIndex < _lods.numPointsInLod[0])){} else{
-        if (predModeEligibleColor(desc, aps, pointCloud, _lods.indexes, predictor))
+      if (predModeEligibleColor(
+            desc, aps, pointCloud, _lods.indexes, predictor,
+            attrInterPredParams))
           decodePredModeColor(aps, values, predictor);
     }
     
@@ -644,7 +651,8 @@ AttributeDecoder::decodeColorsPred(
         const auto parentIndex = predictor.neighbors[0].predictorIndex;
         predictedColor = slicingParam.buf.pointCloudParent->getColor(parentIndex);
     }else{
-        predictedColor = predictor.predictColor(pointCloud, _lods.indexes);
+        predictedColor = predictor.predictColor(
+          pointCloud, _lods.indexes, attrInterPredParams);
     }
 
     if (icpPresent && predictorIndex == _lods.numPointsInLod[lod]){
@@ -901,13 +909,15 @@ AttributeDecoder::decodeColorsLift(
   int minGeomNodeSizeLog2,
   PCCResidualsDecoder& decoder,
   PCCPointSet3& pointCloud,
+  const AttributeInterPredParams& attrInterPredParams,
   AttributeGranularitySlicingParam &slicingParam)
 {
   const size_t pointCount = pointCloud.getPointCount();
   std::vector<uint64_t> weights;
   
   if (!aps.scalable_lifting_enabled_flag) {
-    PCCComputeQuantizationWeights(_lods.predictors, weights);
+    PCCComputeQuantizationWeights(
+      _lods.predictors, weights, attrInterPredParams.enableAttrInterPred);
   } else {
       computeQuantizationWeightsScalable(
         _lods.predictors, _lods.numPointsInLod, geom_num_points_minus1 + 1,
@@ -918,6 +928,16 @@ AttributeDecoder::decodeColorsLift(
   std::vector<Vec3<int64_t>> colors;
   colors.resize(pointCount);
 
+  std::vector<Vec3<int64_t>> colorsRef;
+  colorsRef.resize(attrInterPredParams.getPointCount());
+
+  for (size_t index = 0; index < attrInterPredParams.getPointCount();
+       ++index) {
+      const auto& colorRef = attrInterPredParams.getColor(index);
+      for (size_t d = 0; d < 3; ++d) {
+      colorsRef[index][d] = int32_t(colorRef[d]) << kFixedPointAttributeShift;
+      }
+  }
   
   size_t pointCountParent = 0;
   std::vector<Vec3<int64_t>> colorsParent;
@@ -1007,8 +1027,11 @@ AttributeDecoder::decodeColorsLift(
     const size_t startIndex = _lods.numPointsInLod[lodIndex - 1];
     const size_t endIndex = _lods.numPointsInLod[lodIndex];
     PCCLiftUpdate(
-      _lods.predictors, weights, startIndex, endIndex, false, colors);
-    PCCLiftPredict(_lods.predictors, startIndex, endIndex, false, colors);
+      _lods.predictors, weights, startIndex, endIndex, false, colors,
+      attrInterPredParams.enableAttrInterPred);
+    PCCLiftPredict(
+      _lods.predictors, startIndex, endIndex, false, colors,
+      attrInterPredParams.enableAttrInterPred, colorsRef);
   }
 
   int64_t clipMax = (1 << desc.bitdepth) - 1;

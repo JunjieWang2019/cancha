@@ -96,6 +96,7 @@ protected:
     const QpSet& qpSet,
     PCCPointSet3& pointCloud,
     PCCResidualsEncoder& encoder,
+    AttributeInterPredParams& attrInterPredParams,
     AttributeGranularitySlicingParam &slicingParam);
 
   void encodeReflectancesPred(
@@ -113,6 +114,7 @@ protected:
     const QpSet& qpSet,
     PCCPointSet3& pointCloud,
     PCCResidualsEncoder& encoder,
+    AttributeInterPredParams& attrInterPredParams,
     AttributeGranularitySlicingParam &slicingParam);
 
   void encodeReflectancesTransformRaht(
@@ -156,7 +158,8 @@ protected:
     PCCResidualsEncoder& encoder,
     PCCResidualsEntropyEstimator& context,
     const Vec3<int8_t>& icpCoeff,
-    const Quantizers& quant);
+    const Quantizers& quant,
+    const AttributeInterPredParams& attrInterPredParams);
 
   static void encodePredModeColor(
     const AttributeParameterSet& aps, int predMode, Vec3<int32_t>& coeff);
@@ -188,7 +191,11 @@ private:
     int maxSizeOfCoeff=0);
 
   std::vector<Vec3<int8_t>> computeInterComponentPredictionCoeffs(
-    const AttributeParameterSet& aps, const PCCPointSet3& pointCloud, PCCPointSet3* parentPointCloud=NULL, int maxSizeOfCoeff=0);
+    const AttributeParameterSet& aps,
+    const PCCPointSet3& pointCloud,
+    const AttributeInterPredParams& attrInterPredParams,
+    PCCPointSet3* parentPointCloud = NULL,
+     int maxSizeOfCoeff = 0);
 
 private:
   // The current attribute slice header

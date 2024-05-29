@@ -604,25 +604,61 @@ struct PCCPredictor {
   int curSubgroup;
 
   Vec3<attr_t> predictColor(
-    const PCCPointSet3& pointCloud, const std::vector<uint32_t>& indexes) const
+    const PCCPointSet3& pointCloud,
+    const std::vector<uint32_t>& indexes,
+    const AttributeInterPredParams& attrInterPredParams) const
   {
     Vec3<int64_t> predicted(0);
     if (predMode > neighborCount) {
       /* nop */
     } else if (predMode > 0) {
-      const Vec3<attr_t> color =
-        pointCloud.getColor(indexes[neighbors[predMode - 1].predictorIndex]);
-      for (size_t k = 0; k < 3; ++k) {
-        predicted[k] += color[k];
-      }
+      const int neighPtIdx = neighbors[predMode - 1].pointIndex;
+      if (attrInterPredParams.enableAttrInterPred) {
+        if (neighbors[predMode - 1].interFrameRef) {
+          const Vec3<attr_t> color = attrInterPredParams.getColor(neighPtIdx);
+          for (size_t k = 0; k < 3; ++k) {
+            predicted[k] += color[k];
+          }
+        } else {
+          const Vec3<attr_t> color = pointCloud.getColor(neighPtIdx);
+          for (size_t k = 0; k < 3; ++k) {
+            predicted[k] += color[k];
+          }
+        }  
+      } 
+      else {
+        const Vec3<attr_t> color =
+          pointCloud.getColor(indexes[neighbors[predMode - 1].predictorIndex]);
+        for (size_t k = 0; k < 3; ++k) {
+          predicted[k] += color[k];
+        }
+      }   
     } else {
       for (size_t i = 0; i < neighborCount; ++i) {
-        const Vec3<attr_t> color =
-          pointCloud.getColor(indexes[neighbors[i].predictorIndex]);
-        const uint32_t w = neighbors[i].weight;
-        for (size_t k = 0; k < 3; ++k) {
-          predicted[k] += w * color[k];
+        const int neighPtIdx = neighbors[i].pointIndex;
+        if (attrInterPredParams.enableAttrInterPred) {
+          if (neighbors[i].interFrameRef) {
+            const Vec3<attr_t> color = attrInterPredParams.getColor(neighPtIdx);
+            const uint32_t w = neighbors[i].weight;
+            for (size_t k = 0; k < 3; ++k) {
+              predicted[k] += w * color[k];
+            }
+          } else {
+            const Vec3<attr_t> color = pointCloud.getColor(neighPtIdx);
+            const uint32_t w = neighbors[i].weight;
+            for (size_t k = 0; k < 3; ++k) {
+              predicted[k] += w * color[k];
+            }
+          }
+        } else {
+          const Vec3<attr_t> color =
+            pointCloud.getColor(indexes[neighbors[i].predictorIndex]); 
+         const uint32_t w = neighbors[i].weight;
+          for (size_t k = 0; k < 3; ++k) {
+            predicted[k] += w * color[k];
+          }
         }
+        
       }
       for (uint32_t k = 0; k < 3; ++k) {
         predicted[k] =

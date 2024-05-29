@@ -663,11 +663,71 @@ AttributeEncoder::encode(
       break;
 
     case AttributeEncoding::kPredictingTransform:
-      encodeColorsPred(desc, attr_aps, qpSet, pointCloud, encoder,slicingParam);
+      encodeColorsPred(
+        desc, attr_aps, qpSet, pointCloud, encoder, attrInterPredParams,
+        slicingParam);
+      if (attrInterPredParams.codeAttributeSecondPass()) {
+        attrInterPredParams.rateEstimate = encoder.stop();
+        dataLen = attrInterPredParams.rateEstimate;
+        const auto costInter = attrInterPredParams.getCost();
+        assert(attrInterPredParams.enableAttrInterPred);
+
+        attrInterPredParams.enableAttrInterPred = false;
+        attrInterPredParams.distEstimate = 0.;
+        const auto lodTemp = _lods;
+        if (attr_aps.lodParametersPresent())
+          _lods.generate(
+            attr_aps, abh, pointCloudOnlyIntra.getPointCount() - 1, 0,
+            pointCloudOnlyIntra, attrInterPredParams);
+        encodeColorsPred(
+          desc, attr_aps, qpSet, pointCloudOnlyIntra, encoderOnlyIntra,
+          attrInterPredParams, slicingParam);
+        attrInterPredParams.rateEstimate = encoderOnlyIntra.stop();
+        const auto costIntra = attrInterPredParams.getCost();
+
+        attrInterPredParams.enableAttrInterPred = true;
+
+        if (costInter > costIntra) {
+          pointCloud = pointCloudOnlyIntra;
+          dataLen = attrInterPredParams.rateEstimate;
+          onlyIntra = true;
+        } else
+          _lods = lodTemp;
+      }
       break;
 
     case AttributeEncoding::kLiftingTransform:
-      encodeColorsLift(desc, attr_aps, qpSet, pointCloud, encoder,slicingParam);
+      encodeColorsLift(
+        desc, attr_aps, qpSet, pointCloud, encoder, attrInterPredParams,
+        slicingParam);
+      if (attrInterPredParams.codeAttributeSecondPass()) {
+        attrInterPredParams.rateEstimate = encoder.stop();
+        dataLen = attrInterPredParams.rateEstimate;
+        const auto costInter = attrInterPredParams.getCost();
+        assert(attrInterPredParams.enableAttrInterPred);
+
+        attrInterPredParams.enableAttrInterPred = false;  // Set for intra run
+        attrInterPredParams.distEstimate = 0.;
+        const auto lodTemp = _lods;
+        if (attr_aps.lodParametersPresent())
+          _lods.generate(
+            attr_aps, abh, pointCloudOnlyIntra.getPointCount() - 1, 0,
+            pointCloudOnlyIntra, attrInterPredParams);
+        encodeColorsLift(
+          desc, attr_aps, qpSet, pointCloudOnlyIntra, encoderOnlyIntra,
+          attrInterPredParams, slicingParam);
+        attrInterPredParams.rateEstimate = encoderOnlyIntra.stop();
+        const auto costIntra = attrInterPredParams.getCost();
+
+        attrInterPredParams.enableAttrInterPred = true;  // Set it back
+
+        if (costInter > costIntra) {
+          pointCloud = pointCloudOnlyIntra;
+          dataLen = attrInterPredParams.rateEstimate;
+          onlyIntra = true;
+        } else
+          _lods = lodTemp;
+      }
       break;
 
     case AttributeEncoding::kRaw:
@@ -1032,14 +1092,16 @@ AttributeEncoder::decidePredModeColor(
   PCCResidualsEncoder& encoder,
   PCCResidualsEntropyEstimator& context,
   const Vec3<int8_t>& icpCoeff,
-  const Quantizers& quant)
+  const Quantizers& quant,
+  const AttributeInterPredParams& attrInterPredParams)
 {
   Vec3<attr_t> attrValue = pointCloud.getColor(indexesLOD[predictorIndex]);
 
   // base case: weighted average of n neighbours
   int startpredIndex = aps.direct_avg_predictor_disabled_flag;
   predictor.predMode = startpredIndex;
-  Vec3<attr_t> attrPred = predictor.predictColor(pointCloud, indexesLOD);
+  Vec3<attr_t> attrPred =
+    predictor.predictColor(pointCloud, indexesLOD, attrInterPredParams);
   Vec3<int64_t> attrResidualQuant =
     computeColorResiduals(aps, attrValue, attrPred, icpCoeff, quant);
   auto attrDistortion =
@@ -1054,8 +1116,16 @@ AttributeEncoder::decidePredModeColor(
     if (i == aps.max_num_direct_predictors)
       break;
 
-    attrPred =
-      pointCloud.getColor(indexesLOD[predictor.neighbors[i].predictorIndex]);
+    if (attrInterPredParams.enableAttrInterPred) {
+      const int nPtIdx = predictor.neighbors[i].pointIndex;
+      if (predictor.neighbors[i].interFrameRef)
+      attrPred = attrInterPredParams.getColor(nPtIdx);
+      else
+      attrPred = pointCloud.getColor(nPtIdx);
+    } else
+      attrPred = pointCloud.getColor(
+        indexesLOD[predictor.neighbors[i].predictorIndex]);
+
     attrResidualQuant =
       computeColorResiduals(aps, attrValue, attrPred, icpCoeff, quant);
     attrDistortion = computeColorDistortions(desc, attrValue, attrPred, quant);
@@ -1121,7 +1191,11 @@ AttributeEncoder::encodePredModeColor(
 
 std::vector<Vec3<int8_t>>
 AttributeEncoder::computeInterComponentPredictionCoeffs(
-  const AttributeParameterSet& aps, const PCCPointSet3& pointCloud, PCCPointSet3* pointCloudParent, int maxSizeOfCoeff)
+  const AttributeParameterSet& aps,
+  const PCCPointSet3& pointCloud,
+  const AttributeInterPredParams& attrInterPredParams,
+  PCCPointSet3* pointCloudParent,
+  int maxSizeOfCoeff)
 {
   int maxNumDetailLevels = aps.maxNumDetailLevels();
   if(maxSizeOfCoeff)
@@ -1155,7 +1229,8 @@ AttributeEncoder::computeInterComponentPredictionCoeffs(
       }
     
     }else{
-      auto predAttr = predictor.predictColor(pointCloud, _lods.indexes);
+      auto predAttr = predictor.predictColor(
+        pointCloud, _lods.indexes,attrInterPredParams);
       auto srcAttr = pointCloud.getColor(pointIdx);
       residual[predIdx] = Vec3<int>(srcAttr) - Vec3<int>(predAttr);
     }
@@ -1224,10 +1299,11 @@ AttributeEncoder::encodeColorsPred(
   const QpSet& qpSet,
   PCCPointSet3& pointCloud,
   PCCResidualsEncoder& encoder,
+  AttributeInterPredParams& attrInterPredParams,
   AttributeGranularitySlicingParam &slicingParam)
 {
   const size_t pointCount = pointCloud.getPointCount();
-
+  attrInterPredParams.distEstimate = 0.;
   int64_t clipMax = (1 << desc.bitdepth) - 1;
   Vec3<int32_t> values;
   PCCResidualsEntropyEstimator context;
@@ -1245,14 +1321,16 @@ AttributeEncoder::encodeColorsPred(
     
     icpPresent = _abh_dep->icpPresent(desc, aps);
     if (icpPresent)
-      _abh_dep->icpCoeffs = computeInterComponentPredictionCoeffs(aps, pointCloud, slicingParam.buf.pointCloudParent);
+      _abh_dep->icpCoeffs = computeInterComponentPredictionCoeffs(aps, pointCloud, attrInterPredParams,
+        slicingParam.buf.pointCloudParent);
     icpCoeff = icpPresent ? _abh_dep->icpCoeffs[0] : 0;
 
   }else{
   
     icpPresent = _abh->icpPresent(desc, aps);
     if (icpPresent)
-      _abh->icpCoeffs = computeInterComponentPredictionCoeffs(aps, pointCloud);
+      _abh->icpCoeffs = computeInterComponentPredictionCoeffs(
+        aps, pointCloud, attrInterPredParams);
     icpCoeff = icpPresent ? _abh->icpCoeffs[0] : 0;
   }
 
@@ -1266,7 +1344,8 @@ AttributeEncoder::encodeColorsPred(
 
   if (!aps.scalable_lifting_enabled_flag) {
     computeQuantizationWeights(
-      _lods.predictors, quantWeights, aps.quant_neigh_weight);
+      _lods.predictors, quantWeights, aps.quant_neigh_weight,
+      attrInterPredParams.enableAttrInterPred);
   } else {
     computeQuantizationWeightsScalable(
       _lods.predictors, _lods.numPointsInLod, pointCount, 0, quantWeights);
@@ -1311,12 +1390,12 @@ AttributeEncoder::encodeColorsPred(
     if(slicingParam.is_dependent_unit && (predictorIndex < _lods.numPointsInLod[0])){
     
     }else{
-        predModeEligible =
-          predModeEligibleColor(desc, aps, pointCloud, _lods.indexes, predictor);
+        predModeEligible = predModeEligibleColor(
+        desc, aps, pointCloud, _lods.indexes, predictor, attrInterPredParams);
         if (predModeEligible)
           decidePredModeColor(
             desc, aps, pointCloud, _lods.indexes, predictorIndex, predictor,
-            encoder, context, icpCoeff, quant);
+          encoder, context, icpCoeff, quant, attrInterPredParams);
     }
 
     const Vec3<attr_t> color = pointCloud.getColor(pointIndex);
@@ -1326,7 +1405,8 @@ AttributeEncoder::encodeColorsPred(
         const auto parentIndex = predictor.neighbors[0].predictorIndex;
         predictedColor = slicingParam.buf.pointCloudParent->getColor(parentIndex);
     }else{
-        predictedColor = predictor.predictColor(pointCloud, _lods.indexes);
+        predictedColor = predictor.predictColor(
+          pointCloud, _lods.indexes,attrInterPredParams);
     }
 
     Vec3<attr_t> reconstructedColor;
@@ -1362,6 +1442,8 @@ AttributeEncoder::encodeColorsPred(
 
       int64_t recon = predictedColor[k] + residualR;
       reconstructedColor[k] = attr_t(PCCClip(recon, int64_t(0), clipMax));
+      if (attrInterPredParams.attrInterIntraSliceRDO)
+        attrInterPredParams.distEstimate += std::abs(reconstructedColor[k] - color[k]);
     }
 
     if (predModeEligible)
@@ -1650,14 +1732,16 @@ AttributeEncoder::encodeColorsLift(
   const QpSet& qpSet,
   PCCPointSet3& pointCloud,
   PCCResidualsEncoder& encoder,
+  AttributeInterPredParams& attrInterPredParams,
   AttributeGranularitySlicingParam &slicingParam)
 {
   const size_t pointCount = pointCloud.getPointCount();
   std::vector<uint64_t> weights;
-
+  attrInterPredParams.distEstimate = 0.;
 
   if (!aps.scalable_lifting_enabled_flag) {
-    PCCComputeQuantizationWeights(_lods.predictors, weights);
+    PCCComputeQuantizationWeights(
+      _lods.predictors, weights, attrInterPredParams.enableAttrInterPred);
   } else {
       computeQuantizationWeightsScalable(
       _lods.predictors, _lods.numPointsInLod, pointCount, 0, weights);
@@ -1673,7 +1757,18 @@ AttributeEncoder::encodeColorsLift(
       colors[index][d] = int32_t(color[d]) << kFixedPointAttributeShift;
     }
   }
-  
+
+  std::vector<Vec3<int64_t>> colorsRef;
+  colorsRef.resize(attrInterPredParams.getPointCount());
+
+  for (size_t index = 0; index < attrInterPredParams.getPointCount();
+       ++index) {
+    const auto& colorRef = attrInterPredParams.getColor(index);
+    for (size_t d = 0; d < 3; ++d) {
+      colorsRef[index][d] = int32_t(colorRef[d]) << kFixedPointAttributeShift;
+    }
+  }
+
   size_t pointCountParent = 0;
   std::vector<Vec3<int64_t>> colorsParent;
   if(slicingParam.is_dependent_unit){
@@ -1693,9 +1788,12 @@ AttributeEncoder::encodeColorsLift(
     const size_t lodIndex = lodCount - i - 1;
     const size_t startIndex = _lods.numPointsInLod[lodIndex - 1];
     const size_t endIndex = _lods.numPointsInLod[lodIndex];
-    PCCLiftPredict(_lods.predictors, startIndex, endIndex, true, colors);
+    PCCLiftPredict(
+      _lods.predictors, startIndex, endIndex, true, colors,
+      attrInterPredParams.enableAttrInterPred, colorsRef);
     PCCLiftUpdate(
-      _lods.predictors, weights, startIndex, endIndex, true, colors);
+      _lods.predictors, weights, startIndex, endIndex, true, colors,
+      attrInterPredParams.enableAttrInterPred);
   }
   
   
@@ -1794,17 +1892,23 @@ AttributeEncoder::encodeColorsLift(
     const size_t startIndex = _lods.numPointsInLod[lodIndex - 1];
     const size_t endIndex = _lods.numPointsInLod[lodIndex];
     PCCLiftUpdate(
-      _lods.predictors, weights, startIndex, endIndex, false, colors);
-    PCCLiftPredict(_lods.predictors, startIndex, endIndex, false, colors);
+      _lods.predictors, weights, startIndex, endIndex, false, colors,
+      attrInterPredParams.enableAttrInterPred);
+    PCCLiftPredict(
+      _lods.predictors, startIndex, endIndex, false, colors,
+      attrInterPredParams.enableAttrInterPred, colorsRef);
   }
 
   int64_t clipMax = (1 << desc.bitdepth) - 1;
   for (size_t f = 0; f < pointCount; ++f) {
+    const Vec3<attr_t> colorOrig = pointCloud.getColor(_lods.indexes[f]);
     const auto color0 =
       divExp2RoundHalfInf(colors[f], kFixedPointAttributeShift);
     Vec3<attr_t> color;
     for (size_t d = 0; d < 3; ++d) {
       color[d] = attr_t(PCCClip(color0[d], 0, clipMax));
+      if (attrInterPredParams.attrInterIntraSliceRDO)
+        attrInterPredParams.distEstimate += std::abs(color[d] - colorOrig[d]);
     }
     pointCloud.setColor(_lods.indexes[f], color);
   }

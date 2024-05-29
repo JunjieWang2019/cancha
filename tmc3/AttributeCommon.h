@@ -146,7 +146,8 @@ bool predModeEligibleColor(
   const AttributeParameterSet& aps,
   const PCCPointSet3& pointCloud,
   const std::vector<uint32_t>& indexes,
-  const PCCPredictor& predictor);
+  const PCCPredictor& predictor,
+  const AttributeInterPredParams& attrInterPredParams);
 
 bool predModeEligibleRefl(
   const AttributeDescription& desc,
