@@ -20,6 +20,16 @@
 - cmake .. -G "Visual Studio 15 2017 Win64"
 - open the generated visual studio solution and build it
 
+### Notes
+
+#### Build for Release
+With single-target generators (e.g. Makefile on linux), cmake may generate
+a build system configured for debugging, by default.  To generate a software
+more suited for runtime comparisons, it may be a good practice to use a build
+system configured for Release. You may add the option
+` -D CMAKE_BUILD_TYPE=Release` to the cmake command line, or set the variable
+`CMAKE_BUILD_TYPE` to `Release` if you are using a frontend for cmake, for
+instance.
 
 ## Running
 
