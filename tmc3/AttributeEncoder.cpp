@@ -1560,6 +1560,38 @@ AttributeEncoder::encodeColorsTransformRaht(
   if (attrInterPredParams.enableAttrInterPred) {
     if (enableRDOCodinglayer)
       predEncoder.set(&encoder.arithmeticEncoder);
+
+    const int voxelCount_ref = int(attrInterPredParams.getPointCount());
+    attrInterPredParams.paramsForInterRAHT.voxelCount = voxelCount_ref;
+    std::vector<MortonCodeWithIndex> packedVoxel_ref(voxelCount_ref);
+    for (int n = 0; n < voxelCount_ref; n++) {
+      if (attrInterPredParams.useRefCloudIndex) {
+        const int idx = attrInterPredParams.refPointCloudIndices[n];
+        packedVoxel_ref[n].mortonCode =
+          mortonAddr((*attrInterPredParams.refIndexCloud)[idx]);
+      } else
+        packedVoxel_ref[n].mortonCode =
+          mortonAddr(attrInterPredParams.referencePointCloud[n]);
+      packedVoxel_ref[n].index = n;
+    }
+
+    sort(packedVoxel_ref.begin(), packedVoxel_ref.end());
+
+    attrInterPredParams.paramsForInterRAHT.mortonCode.resize(voxelCount_ref);
+    attrInterPredParams.paramsForInterRAHT.attributes.resize(attribCount * voxelCount_ref);
+
+    // Populate input arrays.
+    for (int n = 0; n < voxelCount_ref; n++) {
+      attrInterPredParams.paramsForInterRAHT.mortonCode[n] =
+        packedVoxel_ref[n].mortonCode;
+      auto color = attrInterPredParams.getColor(packedVoxel_ref[n].index);
+
+      attrInterPredParams.paramsForInterRAHT.attributes[attribCount * n] = color[0];
+      attrInterPredParams.paramsForInterRAHT.attributes[attribCount * n + 1] = color[1];
+      attrInterPredParams.paramsForInterRAHT.attributes[attribCount * n + 2] = color[2];
+
+    }
+
   }
   else {
     if (enableRDOCodinglayer) {

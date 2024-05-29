@@ -357,6 +357,12 @@ struct AttributeInterPredParams {
     return useRefCloudIndex ? refIndexCloud->getReflectance(refPointCloudIndices[idx])
                             : referencePointCloud.getReflectance(idx);
   }
+  pcc::Vec3<pcc::attr_t> getColor(int idx) const
+  {
+    return useRefCloudIndex
+      ? refIndexCloud->getColor(refPointCloudIndices[idx])
+      : referencePointCloud.getColor(idx);
+  }
   void clear() { referencePointCloud.clear(); }
   AttributeInterPredParamsForRAHT paramsForInterRAHT;
   bool codeAttributeSecondPass()

@@ -92,14 +92,23 @@ PCCRAHTACCoefficientEntropyEstimate::resStatUpdate(int32_t value, int k)
 
 //============================================================================
 int8_t
-PCCRAHTComputeLCP::computeLastComponentPredictionCoeff(const bool& enableNonPred,
-  int m, int64_t coeffs[][3], int64_t nonPredCoeffs[][3], int8_t& nonPredLcpCoeff)
+PCCRAHTComputeLCP::computeLastComponentPredictionCoeff(
+  const bool& enableNonPred,
+  const bool& enableIntraPred,
+  int m,
+  int64_t coeffs[][3],
+  int64_t nonPredCoeffs[][3],
+  int8_t& nonPredLcpCoeff,
+  int64_t intraPredCoeffs[][3],
+  int8_t& intraPredLcpCoeff)
 {
   int8_t signs;
   int64_t sumk1k22 = 0;
   int64_t sumk1k11 = 0;
   int64_t nonPredSumk1k22 = 0;
   int64_t nonPredSumk1k11 = 0;
+  int64_t intraPredSumk1k22 = 0;
+  int64_t intraPredSumk1k11 = 0;
   for (size_t coeffIdx = 0; coeffIdx < m; ++coeffIdx) {
     auto& attr = coeffs[coeffIdx];  
     int64_t mult = attr[1] * attr[2];
@@ -113,9 +122,17 @@ PCCRAHTComputeLCP::computeLastComponentPredictionCoeff(const bool& enableNonPred
       nonPredSumk1k22 += nonPredMult;
       nonPredSumk1k11 += nonPredMult2;
     }
+    if (enableIntraPred) {
+      auto& intraPredAttr = intraPredCoeffs[coeffIdx];
+      int64_t intraPredMult = intraPredAttr[1] * intraPredAttr[2];
+      int64_t intraPredMult2 = intraPredAttr[1] * intraPredAttr[1];
+      intraPredSumk1k22 += intraPredMult;
+      intraPredSumk1k11 += intraPredMult2;
+    }
   }
   int scale = 0;
   int nonPredScale = 0;
+  int intraPredScale = 0;
 
 
   if(window1.size() < 128){
@@ -128,6 +145,12 @@ PCCRAHTComputeLCP::computeLastComponentPredictionCoeff(const bool& enableNonPred
       nonPredWindow2.push(nonPredSumk1k11);
       nonPredSumk1k2 += nonPredSumk1k22;
       nonPredSumk1k1 += nonPredSumk1k11;
+    }
+    if (enableIntraPred) {
+      intraPredWindow1.push(intraPredSumk1k22);
+      intraPredWindow2.push(intraPredSumk1k11);
+      intraPredSumk1k2 += intraPredSumk1k22;
+      intraPredSumk1k1 += intraPredSumk1k11;
     }
   }else{
     int removedValue1 = window1.front();
@@ -160,6 +183,21 @@ PCCRAHTComputeLCP::computeLastComponentPredictionCoeff(const bool& enableNonPred
 
     }
 
+    if (enableIntraPred) {
+      int intraPredremovedValue1 = intraPredWindow1.front();
+      intraPredWindow1.pop();
+      int intraPredremovedValue2 = intraPredWindow2.front();
+      intraPredWindow2.pop();
+      intraPredSumk1k2 -= intraPredremovedValue1;
+      intraPredSumk1k1 -= intraPredremovedValue2;
+
+      intraPredWindow1.push(intraPredSumk1k22);
+      intraPredWindow2.push(intraPredSumk1k11);
+
+      intraPredSumk1k2 += intraPredSumk1k22;
+      intraPredSumk1k1 += intraPredSumk1k11;
+    }
+
   }
 
   if (sumk1k2 && sumk1k1) {
@@ -175,6 +213,13 @@ PCCRAHTComputeLCP::computeLastComponentPredictionCoeff(const bool& enableNonPred
     }
     nonPredLcpCoeff = PCCClip(nonPredScale, -16, 16);
 
+  }
+
+  if (enableIntraPred) {
+    if (intraPredSumk1k2 && intraPredSumk1k1) {
+      intraPredScale = divApprox(intraPredSumk1k2, intraPredSumk1k1, 4);
+    }
+    intraPredLcpCoeff = PCCClip(intraPredScale, -16, 16);
   }
 
   return signs;
@@ -1340,6 +1385,7 @@ uraht_process(
   }
   int8_t LcpCoeff = 0;
   int8_t nonPredLcpCoeff = 0;
+  int8_t intraPredLcpCoeff = 0;
   double dlambda = 1.0;
   int filterIdx = 0;
   for (int level = levelHfPos.size() - 1, level_ref = levelHfPos_ref.size() - 1, isFirst = 1; level > 0; /*nop*/) {
@@ -1405,6 +1451,7 @@ uraht_process(
 
     LcpCoeff = 0;
     nonPredLcpCoeff = 0;
+    intraPredLcpCoeff = 0;
     PCCRAHTComputeLCP curlevelLcp;
     int64_t position = 0;
 
@@ -1565,9 +1612,11 @@ uraht_process(
 	  // For Lcp prediction
 	  int64_t CoeffRecBuf[8][3] = {0};
       int64_t nonPredCoeffRecBuf[8][3] = {0};
+      int64_t intraPredCoeffRecBuf[8][3] = {0};
       FixedPoint transformResidueRecBuf[3] = {0};
       FixedPoint transformNonPredResRecBuf[3] = {0};
-      
+      FixedPoint transformIntraPredResRecBuf[3] = {0};     
+
       int weights[8 + 8 + 8 + 8] = {};
       uint64_t sumWeights_ref = 0, sumWeights_cur = 0; 
 	  FixedPoint finterDC[3] = {0}, interParentMean[3] = {0};
@@ -2025,8 +2074,22 @@ uraht_process(
             if (curLevelEnableACInterPred) {
               intraCoeff = transformIntraBuf[k][idx].round();
               intraDist2 += intraCoeff * intraCoeff;
-              intraQcoeff =
-                q.quantize(intraCoeff << kFixedPointAttributeShift);
+
+              if (rahtPredParams.raht_last_component_prediction_enabled_flag) {
+                if (k != 2) {
+                  intraQcoeff = q.quantize(intraCoeff << kFixedPointAttributeShift);
+                  transformIntraPredResRecBuf[k] =
+                    divExp2RoundHalfUp(q.scale(intraQcoeff), kFixedPointAttributeShift);
+                }
+                else if (k == 2) {
+                  transformIntraPredResRecBuf[k].val =
+                    transformIntraBuf[k][idx].val - ((intraPredLcpCoeff * transformIntraPredResRecBuf[1].val) >> 4);
+                  intraCoeff = transformIntraPredResRecBuf[k].round();
+                  intraQcoeff = q.quantize((intraCoeff) << kFixedPointAttributeShift);
+                }
+              }
+              else
+                intraQcoeff = q.quantize(intraCoeff << kFixedPointAttributeShift);
 
 			  auto recIntraCoeff = divExp2RoundHalfUp(
                 q.scale(intraQcoeff), kFixedPointAttributeShift);
@@ -2131,8 +2194,10 @@ uraht_process(
               transformResidueRecBuf[k].val = 0;
             }
 
-            if (intraFlagRDOQ)  // apply RDOQ
+            if (intraFlagRDOQ){  // apply RDOQ
               transformIntraBuf[k][idx].val = 0;
+              transformIntraPredResRecBuf[k].val = 0;
+			}
 
             if (nonPredFlagRDOQ) {
               transformNonPredBuf[k][idx].val = 0;
@@ -2182,12 +2247,29 @@ uraht_process(
               assert(intraCoeff <= INT_MAX && intraCoeff >= INT_MIN);
               intraCoeff = q.quantize(intraCoeff << kFixedPointAttributeShift);
 
+              if (!rahtPredParams.integer_haar_enable_flag && rahtPredParams.raht_last_component_prediction_enabled_flag) {
+                if (k != 2) {
+                  transformIntraPredBuf[k][idx] += transformIntraPredResRecBuf[k];
+                }
+                else if (k == 2) {
+                  intraCoeff = transformIntraPredResRecBuf[k].round();
+                  intraCoeff = q.quantize(intraCoeff << kFixedPointAttributeShift);
+                  transformIntraPredResRecBuf[k] = divExp2RoundHalfUp(
+                    q.scale(intraCoeff), kFixedPointAttributeShift);
+                  transformIntraPredResRecBuf[k].val += intraPredLcpCoeff * transformIntraPredResRecBuf[1].val >> 4;
+                  transformIntraPredBuf[k][idx] += transformIntraPredResRecBuf[k];
+                }
+                intraPredCoeffRecBuf[nodelvlSum][k] = transformIntraPredResRecBuf[k].round();
+                NodeAllIntraRecBuf[k][idx] = transformIntraPredResRecBuf[k];                
+              }
+			  else {
+                reconAllIntraCoeff = divExp2RoundHalfUp(q.scale(intraCoeff), kFixedPointAttributeShift);
+                transformIntraPredBuf[k][idx] += reconAllIntraCoeff;
+                NodeAllIntraRecBuf[k][idx] = reconAllIntraCoeff;
+              } 
+
               intraEstimate.updateCostBits(intraCoeff, k);
               *intraCoeffBufItK[k]++ = intraCoeff;
-
-              reconAllIntraCoeff = divExp2RoundHalfUp(q.scale(intraCoeff), kFixedPointAttributeShift);
-              transformIntraPredBuf[k][idx] += reconAllIntraCoeff;
-              NodeAllIntraRecBuf[k][idx] = reconAllIntraCoeff;
 
               intraEstimate.resStatUpdate(intraCoeff, k);
               
@@ -2272,8 +2354,12 @@ uraht_process(
         && !rahtPredParams.integer_haar_enable_flag
         && rahtPredParams.raht_last_component_prediction_enabled_flag
         && inheritDc) {
-        LcpCoeff = curlevelLcp.computeLastComponentPredictionCoeff(isEncoder &&
-		  enableACRDONonPred, nodelvlSum, CoeffRecBuf, nonPredCoeffRecBuf, nonPredLcpCoeff);
+        LcpCoeff = curlevelLcp.computeLastComponentPredictionCoeff(
+		  isEncoder && enableACRDONonPred,
+          isEncoder && enableACRDOInterPred, 
+		  nodelvlSum, CoeffRecBuf, 
+		  nonPredCoeffRecBuf, nonPredLcpCoeff,
+          intraPredCoeffRecBuf, intraPredLcpCoeff);
       }
       
       if(rahtPredParams.integer_haar_enable_flag){

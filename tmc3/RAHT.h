@@ -209,16 +209,28 @@ private:
 
 
 struct PCCRAHTComputeLCP {
-  int8_t computeLastComponentPredictionCoeff(const bool& enableNonPred, int m, int64_t coeffs[][3], int64_t nonPredCoeffs[][3], int8_t& nonPredLcp);
+  int8_t computeLastComponentPredictionCoeff(
+    const bool& enableNonPred,
+    const bool& enableIntraPred,
+    int m,
+    int64_t coeffs[][3], 
+	int64_t nonPredCoeffs[][3], 
+	int8_t& nonPredLcpCoeff,
+    int64_t intraPredCoeffs[][3],
+    int8_t& intraPredLcpCoeff);
 
 private:
   int64_t sumk1k2 = 0;
   int64_t sumk1k1 = 0;
   int64_t nonPredSumk1k2 = 0;
   int64_t nonPredSumk1k1 = 0;
+  int64_t intraPredSumk1k2 = 0;
+  int64_t intraPredSumk1k1 = 0;
   std::queue<int64_t> window1;
   std::queue<int64_t> window2;
   std::queue<int64_t> nonPredWindow1;
   std::queue<int64_t> nonPredWindow2;
+  std::queue<int64_t> intraPredWindow1;
+  std::queue<int64_t> intraPredWindow2;
 };
 } /* namespace pcc */
