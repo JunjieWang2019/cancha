@@ -336,6 +336,8 @@ private:
   BiPredictionEncodeParams biPredEncodeParams;
   HierarchicalGOFParams hGOFEncodeParams;
 
+  // Identifies the previous frame in bistream order
+  int _prevFrameLsb;
 };
 
 //----------------------------------------------------------------------------

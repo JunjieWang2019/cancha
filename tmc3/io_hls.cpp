@@ -1597,6 +1597,15 @@ write(
       }
     }
   }
+  if (
+    gbh.interPredictionEnabledFlag
+    && sps.inter_entropy_continuation_enabled_flag) {
+    bs.write(&gbh.slice_inter_entropy_continuation_flag);
+    if (gbh.slice_inter_entropy_continuation_flag) {
+      bs.writeUn(sps.frame_ctr_bits, gbh.inter_entropy_prev_frame_lsb);
+      bs.writeUe(gbh.inter_entropy_prev_slice_id);
+    }
+  }
 
   // layer-group slicing
   if (sps.layer_group_enabled_flag)
@@ -1826,7 +1835,16 @@ parseGbh(
       }
     }
   }
-  
+  gbh.slice_inter_entropy_continuation_flag = false;
+  if (
+    gbh.interPredictionEnabledFlag
+    && sps.inter_entropy_continuation_enabled_flag) {
+    bs.read(&gbh.slice_inter_entropy_continuation_flag);
+    if (gbh.slice_inter_entropy_continuation_flag) {
+      bs.readUn(sps.frame_ctr_bits, &gbh.inter_entropy_prev_frame_lsb);
+      bs.readUe(&gbh.inter_entropy_prev_slice_id);
+    }
+  }
   // layer-group slicing
   if (sps.layer_group_enabled_flag)
 	  bs.readUn(16, &gbh.numSubsequentSubgroups);
@@ -1836,11 +1854,12 @@ parseGbh(
 	  && gps.geom_octree_depth_planar_eligibiity_enabled_flag
 	  && !gps.geom_angular_mode_enabled_flag;
 
-  if (sps.layer_group_enabled_flag && checkPlanarEligibilityBasedOnOctreeDepth) {
-	  gbh.planarEligibleKOctreeDepth.resize(sps.num_layers_minus1[0] + 1);
-	  for (int i = 0; i <= sps.num_layers_minus1[0]; i++) {
-		  gbh.planarEligibleKOctreeDepth[i] = bs.read();
-	  }
+  if (
+    sps.layer_group_enabled_flag && checkPlanarEligibilityBasedOnOctreeDepth) {
+    gbh.planarEligibleKOctreeDepth.resize(sps.num_layers_minus1[0] + 1);
+    for (int i = 0; i <= sps.num_layers_minus1[0]; i++) {
+      gbh.planarEligibleKOctreeDepth[i] = bs.read();
+    }
   }
 
   bs.byteAlign();

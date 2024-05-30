@@ -813,6 +813,12 @@ struct GeometryBrickHeader {
   int lpu_type;
   bool min_zero_origin_flag;
 
+  // Indicates the current slice reuses contexts from the prevous slice
+  bool slice_inter_entropy_continuation_flag;
+
+  // The id of the previous slice in bitsream order
+  int inter_entropy_prev_slice_id;
+  int inter_entropy_prev_frame_lsb;
 
   // layer-group slicing parameter
   std::vector<bool> planarEligibleKOctreeDepth;

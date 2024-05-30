@@ -136,6 +136,8 @@ PCCTMC3Decoder3::dectectFrameBoundary(const PayloadBuffer* buf)
   }
 
   auto bdry = _frameCtr.isDifferentFrame(frameCtrLsb, _sps->frame_ctr_bits);
+  if (bdry)
+    _prevFrameLsb = _frameCtr & (1 << _sps->frame_ctr_bits - 1);
   _frameCtr.update(frameCtrLsb, _sps->frame_ctr_bits);
 
   return bdry;
@@ -709,16 +711,16 @@ PCCTMC3Decoder3::decodeGeometryBrick(const PayloadBuffer& buf)
   if (_gbh.entropy_continuation_flag) {
     assert(!_firstSliceInFrame);
     assert(_gbh.prev_slice_id == _prevSliceId);
+  } else if (_gbh.slice_inter_entropy_continuation_flag) {
+    assert(_firstSliceInFrame);
+    assert(_gbh.inter_entropy_prev_slice_id == _prevSliceId);
+    assert(_gbh.inter_entropy_prev_frame_lsb == _prevFrameLsb);
   } else {
     // forget (reset) all saved context state at boundary
-    if (
-      !_sps->inter_entropy_continuation_enabled_flag
-      || !_gbh.interPredictionEnabledFlag) {
-      _ctxtMemOctreeGeom->reset();
-      _ctxtMemPredGeom->reset();
-      for (auto& ctxtMem : _ctxtMemAttrs)
-        ctxtMem.reset();
-    }
+    _ctxtMemOctreeGeom->reset();
+    _ctxtMemPredGeom->reset();
+    for (auto& ctxtMem : _ctxtMemAttrs)
+      ctxtMem.reset();
   }
 
   // set default attribute values (in case an attribute data unit is lost)
@@ -1039,10 +1041,19 @@ PCCTMC3Decoder3::decodeAttributeBrick(const PayloadBuffer& buf)
   // sanity check for loss detection
   if (_gbh.entropy_continuation_flag)
     assert(_gbh.prev_slice_id == _ctxtMemAttrSliceIds[abh.attr_sps_attr_idx]);
+  if (_gbh.slice_inter_entropy_continuation_flag) {
+    assert(
+      _gbh.inter_entropy_prev_slice_id
+      == _ctxtMemAttrSliceIds[abh.attr_sps_attr_idx]);
+    assert(
+      _gbh.inter_entropy_prev_frame_lsb
+      == _ctxtMemAttrFrameLsbs[abh.attr_sps_attr_idx]);
+  }
 
   // Ensure context arrays are allocated context arrays
   // todo(df): move this to sps activation
   _ctxtMemAttrSliceIds.resize(_sps->attributeSets.size());
+  _ctxtMemAttrFrameLsbs.resize(_sps->attributeSets.size());
   _ctxtMemAttrs.resize(_sps->attributeSets.size());
 
   // In order to determinet hat the attribute decoder is reusable, the abh
@@ -1293,6 +1304,8 @@ PCCTMC3Decoder3::decodeAttributeBrick(const PayloadBuffer& buf)
 
   // Note the current sliceID for loss detection
   _ctxtMemAttrSliceIds[abh.attr_sps_attr_idx] = _sliceId;
+  _ctxtMemAttrFrameLsbs[abh.attr_sps_attr_idx] =
+    _frameCtr & (1 << _sps->frame_ctr_bits - 1);
 
   if (_sps->layer_group_enabled_flag && attr_aps.layer_group_enabled_flag) {
 

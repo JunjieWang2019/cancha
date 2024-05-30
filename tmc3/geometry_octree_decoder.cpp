@@ -280,7 +280,9 @@ GeometryOctreeDecoder::GeometryOctreeDecoder(
   , _angularExtension(gps.octree_angular_extension_flag)
   , _angularDecideIDCMEligible(gps.one_point_alone_laser_beam_flag) 
 {
-  if (!_useBitwiseOccupancyCoder && !gbh.entropy_continuation_flag) {
+  if (
+    !_useBitwiseOccupancyCoder && !gbh.entropy_continuation_flag
+    && !gbh.slice_inter_entropy_continuation_flag) {
     for (int i = 0; i < 10; i++)
       _bytewiseOccupancyCoder[i].init(kDualLutOccupancyCoderInit[i]);
   }

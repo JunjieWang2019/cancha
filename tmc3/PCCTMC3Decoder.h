@@ -218,6 +218,7 @@ private:
   std::unique_ptr<PredGeomContexts> _ctxtMemPredGeom;
   std::vector<AttributeContexts> _ctxtMemAttrs;
   std::vector<int> _ctxtMemAttrSliceIds;
+  std::vector<int> _ctxtMemAttrFrameLsbs;
 
   // Attribute decoder for reuse between attributes of same slice
   std::unique_ptr<AttributeDecoderIntf> _attrDecoder;
@@ -234,6 +235,9 @@ private:
   HierarchicalGOFParams hGOFDecodeParams;
 
   bool firstAttributeInSlice;
+  
+  // Identifies the previous frame in bistream order
+  int _prevFrameLsb;
   
   LayerGroupHandler _gHandler;
   std::vector<PCCPointSet3> _subgroupPointCloud;

@@ -94,6 +94,7 @@ PCCTMC3Encoder3::compress(
   CloudFrame* reconCloud)
 {
   // start of frame
+  _prevFrameLsb = _frameCounter & (1 << params->sps.frame_ctr_bits - 1);
   if (params->gps.biPredictionEnabledFlag)
     _frameCounter = biPredEncodeParams.currentFrameIndex;
   else
@@ -1791,6 +1792,8 @@ PCCTMC3Encoder3::encodeGeometryBrick(
   gbh.geom_geom_parameter_set_id = _gps->gps_geom_parameter_set_id;
   gbh.geom_slice_id = _sliceId;
   gbh.prev_slice_id = _prevSliceId;
+  gbh.inter_entropy_prev_slice_id = _prevSliceId;
+  gbh.inter_entropy_prev_frame_lsb = _prevFrameLsb;
   // NB: slice_tag could be set to some other (external) meaningful value
   gbh.slice_tag = std::max(0, _tileId);
   gbh.frame_ctr_lsb = _frameCounter & ((1 << _sps->frame_ctr_bits) - 1);
@@ -1847,6 +1850,11 @@ PCCTMC3Encoder3::encodeGeometryBrick(
   gbh.entropy_continuation_flag = false;
   if (_sps->entropy_continuation_enabled_flag)
     gbh.entropy_continuation_flag = !_firstSliceInFrame;
+
+  // Inter entropy continuation is not permitted for non-first slice of a frame
+  gbh.slice_inter_entropy_continuation_flag = false;
+  if (_sps->inter_entropy_continuation_enabled_flag && gbh.interPredictionEnabledFlag)
+    gbh.slice_inter_entropy_continuation_flag = _firstSliceInFrame;
 
   // inform the geometry coder what the root node size is
   for (int k = 0; k < 3; k++) {
@@ -2030,68 +2038,67 @@ PCCTMC3Encoder3::encodeGeometryBrick(
 	  //release all stored ctx
 	  _gHandler.releaseCtxForGeometry();
 	  _gHandler.releaseNodes();
-  }
-  else {
-	  for (int i = 0; i < 1 + gbh.geom_stream_cnt_minus1; i++) {
-		  arithmeticEncoders.emplace_back(new EntropyEncoder(maxAcBufLen, nullptr));
-		  auto& aec = arithmeticEncoders.back();
-		  aec->enableBypassStream(_sps->cabac_bypass_stream_enabled_flag);
-		  aec->setBypassBinCodingWithoutProbUpdate(_sps->bypass_bin_coding_without_prob_update);
-		  aec->start();
-	  }
+  } else {
+    for (int i = 0; i < 1 + gbh.geom_stream_cnt_minus1; i++) {
+      arithmeticEncoders.emplace_back(
+        new EntropyEncoder(maxAcBufLen, nullptr));
+      auto& aec = arithmeticEncoders.back();
+      aec->enableBypassStream(_sps->cabac_bypass_stream_enabled_flag);
+      aec->setBypassBinCodingWithoutProbUpdate(
+        _sps->bypass_bin_coding_without_prob_update);
+      aec->start();
+    }
 
-	  // forget (reset) all saved context state at boundary
-	  if (!gbh.entropy_continuation_flag) {
-		  if (
-			  !_sps->inter_entropy_continuation_enabled_flag
-			  || !gbh.interPredictionEnabledFlag) {
-			  _ctxtMemOctreeGeom->reset();
-			  _ctxtMemPredGeom->reset();
-			  for (auto& ctxtMem : _ctxtMemAttrs)
-				  ctxtMem.reset();
-		  }
-	  }
+    // forget (reset) all saved context state at boundary
+    // forget (reset) all saved context state at boundary
+    if (
+      !gbh.entropy_continuation_flag
+      && !gbh.slice_inter_entropy_continuation_flag) {
+      _ctxtMemOctreeGeom->reset();
+      _ctxtMemPredGeom->reset();
+      for (auto& ctxtMem : _ctxtMemAttrs)
+        ctxtMem.reset();
+    }
 
-	  if (_gps->predgeom_enabled_flag) {
-		  _refFrameSph.setInterEnabled(gbh.interPredictionEnabledFlag);
-		  biPredEncodeParams._refFrameSph2.setInterEnabled(gbh.interPredictionEnabledFlag && gbh.biPredictionEnabledFlag);
-		  if (!gbh.interPredictionEnabledFlag) {
-			  if (_gps->globalMotionEnabled) {
-				  _refFrameSph.updateNextMovingStatus(false);
-			  }
-			  _refFrameSph.clearRefFrame();
-			  if (_gps->biPredictionEnabledFlag) {
-				  if (_gps->globalMotionEnabled)
-					  biPredEncodeParams._refFrameSph2.updateNextMovingStatus(false);
-				  biPredEncodeParams._refFrameSph2.clearRefFrame();
-			  }
-			  previousAsInter = false;
-		  }
-		  else {
-			  previousAsInter = true;
-		  }
-		  encodePredictiveGeometry(
-			  params->predGeom, *_gps, gbh, pointCloud, &_posSph, _refFrameSph, biPredEncodeParams._refFrameSph2,
-			  *_ctxtMemPredGeom, arithmeticEncoders[0].get());
-	  }
-	  else if (!_gps->trisoup_enabled_flag) {
-		  encodeGeometryOctree(
-			  params->geom, *_gps, gbh, pointCloud, *_ctxtMemOctreeGeom,
-			  arithmeticEncoders, _refFrame, *_sps, params->interGeom, 
-			  attrInterPredParams.compensatedPointCloud, biPredEncodeParams);
-	  }
-	  else
-	  {
-		  // limit the number of points to the slice limit
-		  // todo(df): this should be derived from the level
-		  gbh.footer.geom_num_points_minus1 = params->partition.sliceMaxPointsTrisoup - 1;
-		  encodeGeometryTrisoup(
-			  params->trisoup, params->geom, *_gps, gbh, pointCloud, pointCloudPadding,
-			  *_ctxtMemOctreeGeom, arithmeticEncoders, _refFrame,
-			  *_sps, params->interGeom, attrInterPredParams.compensatedPointCloud);
-	  }
-	  // signal the actual number of points coded
-	  gbh.footer.geom_num_points_minus1 = pointCloud.getPointCount() - 1;
+    if (_gps->predgeom_enabled_flag) {
+      _refFrameSph.setInterEnabled(gbh.interPredictionEnabledFlag);
+      biPredEncodeParams._refFrameSph2.setInterEnabled(
+        gbh.interPredictionEnabledFlag && gbh.biPredictionEnabledFlag);
+      if (!gbh.interPredictionEnabledFlag) {
+        if (_gps->globalMotionEnabled) {
+          _refFrameSph.updateNextMovingStatus(false);
+        }
+        _refFrameSph.clearRefFrame();
+        if (_gps->biPredictionEnabledFlag) {
+          if (_gps->globalMotionEnabled)
+            biPredEncodeParams._refFrameSph2.updateNextMovingStatus(false);
+          biPredEncodeParams._refFrameSph2.clearRefFrame();
+        }
+        previousAsInter = false;
+      } else {
+        previousAsInter = true;
+      }
+      encodePredictiveGeometry(
+        params->predGeom, *_gps, gbh, pointCloud, &_posSph, _refFrameSph,
+        biPredEncodeParams._refFrameSph2, *_ctxtMemPredGeom,
+        arithmeticEncoders[0].get());
+    } else if (!_gps->trisoup_enabled_flag) {
+      encodeGeometryOctree(
+        params->geom, *_gps, gbh, pointCloud, *_ctxtMemOctreeGeom,
+        arithmeticEncoders, _refFrame, *_sps, params->interGeom,
+        attrInterPredParams.compensatedPointCloud, biPredEncodeParams);
+    } else {
+      // limit the number of points to the slice limit
+      // todo(df): this should be derived from the level
+      gbh.footer.geom_num_points_minus1 =
+        params->partition.sliceMaxPointsTrisoup - 1;
+      encodeGeometryTrisoup(
+        params->trisoup, params->geom, *_gps, gbh, pointCloud,
+        pointCloudPadding, *_ctxtMemOctreeGeom, arithmeticEncoders, _refFrame,
+        *_sps, params->interGeom, attrInterPredParams.compensatedPointCloud);
+    }
+    // signal the actual number of points coded
+    gbh.footer.geom_num_points_minus1 = pointCloud.getPointCount() - 1;
 
 	  if (_gps->predgeom_enabled_flag && gbh.interPredictionEnabledFlag && _gps->globalMotionEnabled) {
 		  gbh.interFrameRefGmcFlag = _refFrameSph.getFrameMovingState();
@@ -2114,9 +2121,9 @@ PCCTMC3Encoder3::encodeGeometryBrick(
           gbh.gm_param[0].gm_trans);
 	  }
 
-	  attrInterPredParams.frameDistance = 1;
-	  movingState = false;
-	  biPredEncodeParams.movingState2 = false;
+    attrInterPredParams.frameDistance = 1;
+    movingState = false;
+    biPredEncodeParams.movingState2 = false;
 
 	  if (gbh.interPredictionEnabledFlag && params->attributeIdxMap.size()
 		  && _aps[params->attributeIdxMap.begin()->second]->attr_encoding
@@ -2129,19 +2136,19 @@ PCCTMC3Encoder3::encodeGeometryBrick(
 			  const double thr1_pre = 0.1 / attrInterPredParams.frameDistance;
 			  const double thr2_pre = params->attrInterPredTranslationThreshold;
 
-			  const double thr1_tan_pre = tan(M_PI * thr1_pre / 180);
-			  const double thr1_sin_pre = sin(M_PI * thr1_pre / 180);
-			  const double Rx = std::abs((mat[5] / scale) / (1. + mat[8] / scale));
-			  const double Ry = std::abs(mat[2] / scale);
-			  const double Rz = std::abs((mat[1] / scale) / (1. + mat[0] / scale));
-			  const double Sx = std::abs(tran[0]);
-			  const double Sy = std::abs(tran[1]);
-			  const double Sz = std::abs(tran[2]);
+        const double thr1_tan_pre = tan(M_PI * thr1_pre / 180);
+        const double thr1_sin_pre = sin(M_PI * thr1_pre / 180);
+        const double Rx = std::abs((mat[5] / scale) / (1. + mat[8] / scale));
+        const double Ry = std::abs(mat[2] / scale);
+        const double Rz = std::abs((mat[1] / scale) / (1. + mat[0] / scale));
+        const double Sx = std::abs(tran[0]);
+        const double Sy = std::abs(tran[1]);
+        const double Sz = std::abs(tran[2]);
 
-			  return (
-				  Rx < thr1_tan_pre&& Ry < thr1_sin_pre&& Rz < thr1_tan_pre
-				  && Sx < thr2_pre&& Sy < thr2_pre&& Sz < thr2_pre);
-		  };
+        return (
+          Rx < thr1_tan_pre && Ry < thr1_sin_pre && Rz < thr1_tan_pre
+          && Sx < thr2_pre && Sy < thr2_pre && Sz < thr2_pre);
+      };
 
 		  movingState = checkMovingState(gbh.gm_param[0]);
 
@@ -2151,34 +2158,34 @@ PCCTMC3Encoder3::encodeGeometryBrick(
 		  }
 	  }
 
-	  // assemble data unit
-	  //  - record the position of each aec buffer for chunk concatenation
-	  std::vector<std::pair<size_t, size_t>> aecStreams;
-	  PayloadBuffer& buf = bufs->at(0);
-	  write(*_sps, *_gps, gbh, &buf);
-	  for (auto& arithmeticEncoder : arithmeticEncoders) {
-		  auto aecLen = arithmeticEncoder->stop();
-		  auto aecBuf = arithmeticEncoder->buffer();
-		  aecStreams.emplace_back(buf.size(), aecLen);
-		  buf.insert(buf.end(), aecBuf, aecBuf + aecLen);
-	  }
+    // assemble data unit
+    //  - record the position of each aec buffer for chunk concatenation
+    std::vector<std::pair<size_t, size_t>> aecStreams;
+    PayloadBuffer& buf = bufs->at(0);
+    write(*_sps, *_gps, gbh, &buf);
+    for (auto& arithmeticEncoder : arithmeticEncoders) {
+      auto aecLen = arithmeticEncoder->stop();
+      auto aecBuf = arithmeticEncoder->buffer();
+      aecStreams.emplace_back(buf.size(), aecLen);
+      buf.insert(buf.end(), aecBuf, aecBuf + aecLen);
+    }
 
-	  // This process is performed here from the last chunk to the first.  It
-	  // is also possible to implement this in a forwards direction too.
-	  if (_sps->cabac_bypass_stream_enabled_flag) {
-		  aecStreams.pop_back();
-		  for (auto i = aecStreams.size() - 1; i + 1; i--) {
-			  auto& stream = aecStreams[i];
-			  auto* ptr = reinterpret_cast<uint8_t*>(buf.data());
-			  auto* chunkA = ptr + stream.first + (stream.second & ~0xff);
-			  auto* chunkB = ptr + stream.first + stream.second;
-			  auto* end = ptr + buf.size();
-			  ChunkStreamBuilder::spliceChunkStreams(chunkA, chunkB, end);
-		  }
-	  }
+    // This process is performed here from the last chunk to the first.  It
+    // is also possible to implement this in a forwards direction too.
+    if (_sps->cabac_bypass_stream_enabled_flag) {
+      aecStreams.pop_back();
+      for (auto i = aecStreams.size() - 1; i + 1; i--) {
+        auto& stream = aecStreams[i];
+        auto* ptr = reinterpret_cast<uint8_t*>(buf.data());
+        auto* chunkA = ptr + stream.first + (stream.second & ~0xff);
+        auto* chunkB = ptr + stream.first + stream.second;
+        auto* end = ptr + buf.size();
+        ChunkStreamBuilder::spliceChunkStreams(chunkA, chunkB, end);
+      }
+    }
 
-	  // append the footer
-	  write(*_gps, gbh, gbh.footer, &bufs->at(0));
+    // append the footer
+    write(*_gps, gbh, gbh.footer, &bufs->at(0));
   }
 
   // Cache gbh for later reference
