@@ -1688,6 +1688,7 @@ parseGbh(
     bs.readUn(segmentBits, &gbh.num_unique_segments_minus1);
     bs.readUe(&gbh.trisoup_vertex_quantization_bits);
     bs.read(&gbh.trisoup_centroid_vertex_residual_flag);
+    gbh.trisoup_face_vertex_flag = false;
     if( gbh.trisoup_centroid_vertex_residual_flag ){
       bs.read(&gbh.trisoup_face_vertex_flag);
     }

@@ -627,6 +627,7 @@ int findIndexOfPlane(Vec3<int32_t> v1, Vec3<int32_t> v2, Vec3<int>& offset){
       }
     }
   }
+  return -1;
 }
 
 bool
@@ -703,6 +704,10 @@ determineNormVandCentroidContexts(
   } else { // 2 vertices
     Vec3<int> offset = 0;
     int ind = findIndexOfPlane(eVert.vertices[0].pos, eVert.vertices[1].pos, offset);
+
+	if (ind == -1)
+      return false;
+
     if (neiInds.idx[ind] == -1) {
       normalV = { 0,0,0 };
       cctx = { 0,0,0,0,0 };
@@ -1098,8 +1103,9 @@ void decodeTrisoupCentroids(
     Vec3<int32_t> gCenter = { 0 }, normalV = { 0 };
     TrisoupCentroidContext cctx = { 0 };
 
+	auto neighbour = isFaceVertexActivated ? nodes6nei[i] : node6nei();
     bool driftCondition = determineNormVandCentroidContexts(
-      nodew, eVerts, eVerts[i], i, nodes6nei[i], bitDropped, gCenter, normalV, cctx, cVerts);
+      nodew, eVerts, eVerts[i], i, neighbour, bitDropped, gCenter, normalV, cctx, cVerts);
 
     if (!(driftCondition && isCentroidDriftActivated)) {
       if (!twoEdgeVertices){
