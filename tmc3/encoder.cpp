@@ -679,8 +679,6 @@ PCCTMC3Encoder3::compress(
   //  - compress
   pcc::CloudFrame reconCloudAlt;
 
-  Box3<int32_t> bboxQPC = quantizedInput.cloud.computeBoundingBox();
-
   for (const auto& partition : partitions.slices) {
     // create partitioned point set
     PCCPointSet3 sliceCloud =
@@ -707,8 +705,7 @@ PCCTMC3Encoder3::compress(
     if (!params->trisoupNodeSizesLog2.empty()) {
       int partitionBoundary = 1 << partitionBoundaryLog2;
       for (int i = 0; i < 3; i++) {
-        _sliceOrigin[i] -=
-          (_sliceOrigin[i] - bboxQPC.min[i]) % partitionBoundary;
+        _sliceOrigin[i] -= _sliceOrigin[i] % partitionBoundary;
       }
     }
 
