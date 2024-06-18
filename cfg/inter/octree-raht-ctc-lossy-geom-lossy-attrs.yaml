@@ -94,6 +94,9 @@ categories:
        - !conditional '${numLasers}'
        - spherical_coord_flag: 1
      -
+       - !conditional '"${group}" =~ m{^cat2}'
+       - rahtEnableIntraPredCodeLayer: 0
+     -
        - !conditional '"${group}" eq "cat3-frame"'
        - rahtInterPredictionDepthMinus1: 7
 

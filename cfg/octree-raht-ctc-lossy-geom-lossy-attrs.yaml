@@ -89,7 +89,9 @@ categories:
      -
        - !conditional '"${group}" eq "scant"'
        - rahtEnableIntraPredCodeLayer: 0
-
+     -
+       - !conditional '"${group}" =~ m{^cat2}'
+       - rahtEnableIntraPredCodeLayer: 0
      ##
      # attribute coding -- reflectance
      -
