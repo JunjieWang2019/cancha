@@ -1236,42 +1236,42 @@ PCCTMC3Decoder3::decodeAttributeBrick(const PayloadBuffer& buf)
     for (auto i = 0; i < _currentPointCloud.getPointCount(); i++)
       _currentPointCloud[i] += _sliceOrigin;
 
-  if (attr_aps.attrInterPredictionEnabled)
-    if (attr_aps.attr_encoding != AttributeEncoding::kRAHTransform)
-      if (_refFrameAlt) {
-        Box3<int> currentFrameBox = _currentPointCloud.computeBoundingBox();
-        if (attrInterPredParams.useRefCloudIndex) {
-          attrInterPredParams.refIndexCloud = &(_refFrameAlt->cloud);
-          auto& indices = attrInterPredParams.refPointCloudIndices;
-          indices.resize(attrInterPredParams.refIndexCloud->getPointCount());
-          const int numPts =
-            attrInterPredParams.refIndexCloud->getPointCount();
-          int ctr = 0;
-          for (auto i = 0; i < numPts; i++) {
-            auto& p = (*(attrInterPredParams.refIndexCloud))[i];
-            if (currentFrameBox.contains(p))
-              indices[ctr++] = i;
-          }
-          indices.resize(ctr);
-        } else {
-          if (attr_aps.spherical_coord_flag && !_gps->biPredictionEnabledFlag)
-            attrInterPredParams.referencePointCloud = _refFrameAlt->cloud;
-          int count = 0;
-          auto& cloudTmp = attrInterPredParams.referencePointCloud;
-          for (int i = 0; i < attrInterPredParams.getPointCount(); i++) {
-            point_t p = cloudTmp[i];
-            if (currentFrameBox.contains(p)) {
-              cloudTmp[count] = p;
-              if (cloudTmp.hasReflectances())
-                cloudTmp.setReflectance(count, cloudTmp.getReflectance(i));
-              if (cloudTmp.hasColors())
-                cloudTmp.setColor(count, cloudTmp.getColor(i));
-              count++;
-            }
-          }
-          cloudTmp.resize(count);
+  if (attr_aps.attrInterPredictionEnabled) {
+    if (_refFrameAlt) {
+      Box3<int> currentFrameBox = _currentPointCloud.computeBoundingBox();
+      if (attrInterPredParams.useRefCloudIndex) {
+        attrInterPredParams.refIndexCloud = &(_refFrameAlt->cloud);
+        auto& indices = attrInterPredParams.refPointCloudIndices;
+        indices.resize(attrInterPredParams.refIndexCloud->getPointCount());
+        const int numPts =
+			attrInterPredParams.refIndexCloud->getPointCount();
+        int ctr = 0;
+        for (auto i = 0; i < numPts; i++) {
+          auto& p = (*(attrInterPredParams.refIndexCloud))[i];
+          if (currentFrameBox.contains(p))
+            indices[ctr++] = i;
         }
-      } 
+        indices.resize(ctr);
+      } else {
+        if (attr_aps.spherical_coord_flag && !_gps->biPredictionEnabledFlag)
+          attrInterPredParams.referencePointCloud = _refFrameAlt->cloud;
+        int count = 0;
+        auto& cloudTmp = attrInterPredParams.referencePointCloud;
+        for (int i = 0; i < attrInterPredParams.getPointCount(); i++) {
+          point_t p = cloudTmp[i];
+          if (currentFrameBox.contains(p)) {
+            cloudTmp[count] = p;
+            if (cloudTmp.hasReflectances())
+              cloudTmp.setReflectance(count, cloudTmp.getReflectance(i));
+            if (cloudTmp.hasColors())
+              cloudTmp.setColor(count, cloudTmp.getColor(i));
+            count++;
+          }
+        }
+        cloudTmp.resize(count);
+      }
+    }
+  }
 
   auto& ctxtMemAttr = _ctxtMemAttrs.at(abh.attr_sps_attr_idx);
   AttributeGranularitySlicingParam slicingParam;
