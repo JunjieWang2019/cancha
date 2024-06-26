@@ -39,7 +39,7 @@ namespace pcc {
       
     }
 
-    _max_depth = endDepth;
+	_max_depth = sps.root_node_size_log2.max();
 
     
     _bboxMax = { 1 << _max_depth, 1 << _max_depth, 1 << _max_depth };
@@ -1849,6 +1849,8 @@ bool setLayerGroupParams(const PCCPointSet3& cloud, const GeometryParameterSet g
 
 		if (!gps.qtbt_enabled_flag)
 			gbh_temp.rootNodeSizeLog2 = gbh_temp.rootNodeSizeLog2.max();
+
+		params.rootNodeSizeLog2 = gbh_temp.rootNodeSizeLog2;
 
 		auto lvlNodeSizeLog2 = mkQtBtNodeSizeList(gps, geom.qtbt, gbh_temp);
 		int minNodeSizeLog2 = gbh_temp.trisoupNodeSizeLog2(gps);

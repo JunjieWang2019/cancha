@@ -452,6 +452,8 @@ struct SequenceParameterSet {
 
   int subgroupBboxOrigin_bits_minus1;
   int subgroupBboxSize_bits_minus1;
+
+  Vec3<int> root_node_size_log2;
 };
 
 //============================================================================

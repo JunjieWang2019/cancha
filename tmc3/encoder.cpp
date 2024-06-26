@@ -258,6 +258,7 @@ PCCTMC3Encoder3::compress(
 
       //set sps based on layer group slcing parameters
 		  params->sps.num_layer_groups_minus1 = params->lgsp.numLayerGroupsMinus1;
+		  params->sps.root_node_size_log2 = params->lgsp.rootNodeSizeLog2;
 		  params->sps.layer_group_id.resize(params->lgsp.numLayerGroupsMinus1 + 1);
 		  params->sps.num_layers_minus1.resize(params->lgsp.numLayerGroupsMinus1 + 1);
 		  params->sps.subgroup_enabled_flag.resize(params->lgsp.numLayerGroupsMinus1 + 1);

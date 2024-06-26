@@ -485,6 +485,9 @@ write(const SequenceParameterSet& sps)
         bs.writeUe(sps.subgroupBboxOrigin_bits_minus1);
         bs.writeUe(sps.subgroupBboxSize_bits_minus1);
       }
+
+	  for (int i = 0; i < 3; i++)
+		  bs.writeUe(sps.root_node_size_log2[i]);
     }
   }
 
@@ -622,6 +625,8 @@ parseSps(const PayloadBuffer& buf)
         bs.readUe(&sps.subgroupBboxOrigin_bits_minus1);
         bs.readUe(&sps.subgroupBboxSize_bits_minus1);
       }
+	  for (int i = 0; i < 3; i++)
+		  bs.readUe(&sps.root_node_size_log2[i]);
     }
   }
 
@@ -1462,6 +1467,9 @@ write(
 
   if (!gps.predgeom_enabled_flag) {
     int tree_depth_minus1 = gbh.tree_depth_minus1();
+	if (sps.layer_group_enabled_flag)
+		tree_depth_minus1 = sps.num_layers_minus1[0];
+
     if (!gps.trisoup_enabled_flag)
       bs.writeUe(tree_depth_minus1);
     else {
@@ -1684,6 +1692,9 @@ parseGbh(
     if (gps.qtbt_enabled_flag)
       for (int i = 0; i <= tree_depth_minus1; i++)
         bs.readUn(3, &gbh.tree_lvl_coded_axis_list[i]);
+
+	if (sps.layer_group_enabled_flag)
+		gbh.tree_lvl_coded_axis_list.resize(sps.root_node_size_log2.max(), 7);
 
     bs.readUe(&gbh.geom_stream_cnt_minus1);
   }
