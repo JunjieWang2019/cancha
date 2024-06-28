@@ -1083,6 +1083,8 @@ PCCTMC3Encoder3::compressPartition(
   //  - recolour
   pointCloud.clear();
   pointCloud = inputPointCloud;
+
+  pointCloudPadding.clear();
   if (paddingPointCloud.getPointCount() != 0)
     pointCloudPadding = paddingPointCloud;
 
