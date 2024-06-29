@@ -257,6 +257,7 @@ AttributeDecoder::decode(
   }
   // generate LoDs if necessary
   if (attr_aps.lodParametersPresent() && _lods.empty()) {
+    _lods.canonical_lod_sampling_enabled_flag = canonical_lod_sampling_enabled_flag();
     _lods.generate(
       attr_aps, abh, pointCloud.getPointCount() - 1, minGeomNodeSizeLog2, pointCloud, attrInterPredParams, slicingParam.maxLevel, slicingParam.is_dependent_unit);
     if(slicingParam.is_dependent_unit)
@@ -378,6 +379,12 @@ AttributeDecoder::pointIndexToPredictorIndex(){
 
   return _pointIndexToPredictorIndex;
 }
+
+bool& 
+AttributeDecoder::canonical_lod_sampling_enabled_flag(){
+  return _canonical_lod_sampling_enabled_flag;
+};
+
 //----------------------------------------------------------------------------
 
 void

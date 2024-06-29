@@ -64,7 +64,7 @@ AttributeLods::generate(
     numPointsInLod, indexes,  
     attrInterPredParams.enableAttrInterPred, attrInterPredParams,
     numPointsInLodRef, indexesRef,
-    maxLevel, skipIntraInLastLevel);
+    maxLevel, skipIntraInLastLevel, canonical_lod_sampling_enabled_flag);
 
   assert(predictors.size() == cloud.getPointCount());
   for (auto& predictor : predictors) {

@@ -77,6 +77,7 @@ public:
   AttributeLods& getLods() override;
   std::vector<uint32_t>& getIndexes() override;
   std::vector<uint32_t>& pointIndexToPredictorIndex() override;
+  bool& canonical_lod_sampling_enabled_flag() override;
 
 protected:
   // todo(df): consider alternative encapsulation
@@ -205,6 +206,7 @@ private:
 
   AttributeLods _lods;
   std::vector<uint32_t> _pointIndexToPredictorIndex;
+  bool _canonical_lod_sampling_enabled_flag;
 };
 
 //============================================================================

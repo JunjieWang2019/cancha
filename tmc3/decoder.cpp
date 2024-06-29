@@ -1278,6 +1278,13 @@ PCCTMC3Decoder3::decodeAttributeBrick(const PayloadBuffer& buf)
     }
   }
 
+  if (_gps->predgeom_enabled_flag && !attr_aps.canonical_point_order_flag) {
+    _attrDecoder->canonical_lod_sampling_enabled_flag() = true;
+  }
+  else {
+    _attrDecoder->canonical_lod_sampling_enabled_flag() = false;
+  }
+
   auto& ctxtMemAttr = _ctxtMemAttrs.at(abh.attr_sps_attr_idx);
   AttributeGranularitySlicingParam slicingParam;
   _attrDecoder->decode(

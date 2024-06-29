@@ -1476,6 +1476,13 @@ PCCTMC3Encoder3::compressPartition(
         cloudTmp.resize(count);
       }  
     }
+
+    if (_gps->predgeom_enabled_flag && !attr_aps.canonical_point_order_flag){
+      attrEncoder->canonical_lod_sampling_enabled_flag() = true;
+    }
+    else{
+      attrEncoder->canonical_lod_sampling_enabled_flag() = false;
+    }
    
     AttributeGranularitySlicingParam slicingParam;
     auto& ctxtMemAttr = _ctxtMemAttrs.at(abh.attr_sps_attr_idx);

@@ -127,7 +127,9 @@ struct AttributeLods {
   std::vector<int> numRefNodesInTheSameSubgroup;
 
   std::vector<uint32_t> indexesRef;
-  std::vector<uint32_t> numPointsInLodRef;  
+  std::vector<uint32_t> numPointsInLodRef;
+  
+  bool canonical_lod_sampling_enabled_flag;
 
 private:
   // This is the aps that was used to generate the LoDs.  It is used to check

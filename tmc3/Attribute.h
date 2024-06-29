@@ -80,6 +80,7 @@ public:
   virtual AttributeLods& getLods() = 0;
   virtual std::vector<uint32_t>& getIndexes() = 0;
   virtual std::vector<uint32_t>& pointIndexToPredictorIndex() = 0;
+  virtual bool& canonical_lod_sampling_enabled_flag() = 0;
 };
 
 //----------------------------------------------------------------------------
@@ -112,6 +113,7 @@ public:
   virtual AttributeLods& getLods() = 0;
   virtual std::vector<uint32_t>& getIndexes() = 0;
   virtual std::vector<uint32_t>& pointIndexToPredictorIndex() = 0;
+  virtual bool& canonical_lod_sampling_enabled_flag() = 0;
 };
 
 //----------------------------------------------------------------------------

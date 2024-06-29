@@ -2884,6 +2884,24 @@ subsampleByDecimation(
   }
 }
 
+inline void
+subsampleByDecimationWithCanonical(
+  const std::vector<uint32_t>& input,
+  int lodSamplingPeriod,
+  std::vector<uint32_t>& retained,
+  std::vector<uint32_t>& indexes,
+  const std::vector<MortonCodeWithIndex>& packedVoxel)
+{
+  const int indexCount = int(input.size());
+  for (int i = 0; i < indexCount; ++i) {
+    if (packedVoxel[input[i]].index % lodSamplingPeriod != 0)
+      indexes.push_back(input[i]);
+    else {
+      retained.push_back(input[i]);
+    }
+  }
+}
+
 //---------------------------------------------------------------------------
 
 inline void
@@ -2896,7 +2914,8 @@ subsample(
   const int32_t lodIndex,
   std::vector<uint32_t>& retained,
   std::vector<uint32_t>& indexes,
-  MortonIndexMap3d& atlas)
+  MortonIndexMap3d& atlas,
+  bool canonical_lod_sampling_enabled_flag = false)
 {
   if (aps.layer_group_enabled_flag) {
     int32_t octreeNodeSizeLog2 = lodIndex;
@@ -2911,8 +2930,16 @@ subsample(
       pointCloud, packedVoxel, input, octreeNodeSizeLog2, retained, indexes,
       direction);
   } else if (aps.lod_decimation_type == LodDecimationMethod::kPeriodic) {
-    auto samplingPeriod = aps.lodSamplingPeriod[lodIndex];
-    subsampleByDecimation(input, samplingPeriod, retained, indexes);
+    if (canonical_lod_sampling_enabled_flag) {
+      static int samplingPeriod = 1;
+      samplingPeriod = lodIndex ? aps.lodSamplingPeriod[lodIndex] * samplingPeriod
+                                : aps.lodSamplingPeriod[lodIndex];
+      subsampleByDecimationWithCanonical(input, samplingPeriod, retained, indexes, packedVoxel);
+    }
+    else {
+      static int samplingPeriod = aps.lodSamplingPeriod[lodIndex];
+      subsampleByDecimation(input, samplingPeriod, retained, indexes);
+    }
   } else if (aps.lod_decimation_type == LodDecimationMethod::kCentroid) {
     auto samplingPeriod = aps.lodSamplingPeriod[lodIndex];
     int32_t octreeNodeSizeLog2 = aps.dist2 + abh.attr_dist2_delta + lodIndex;
@@ -3018,7 +3045,8 @@ buildPredictorsFast(
   std::vector<uint32_t>& numberOfPointsPerLevelOfDetailRef,
   std::vector<uint32_t>& indexesRef,
   int maxLevel=0,
-  bool isGSUnit=false)
+  bool isGSUnit=false,
+  bool canonical_lod_sampling_enabled_flag=false)
 {
   const int32_t pointCount = int32_t(pointCloud.getPointCount());
   assert(pointCount);
@@ -3131,7 +3159,7 @@ buildPredictorsFast(
     } else {
       subsample(
         aps, abh, pointCloud, packedVoxel, input, lodIndex, retained, indexes,
-        atlas);
+        atlas, canonical_lod_sampling_enabled_flag);
     }
     const int32_t endIndex = indexes.size();
 
