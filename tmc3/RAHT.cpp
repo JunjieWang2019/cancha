@@ -1444,8 +1444,9 @@ uraht_process(
       attrInterPredParams.paramsForInterRAHT.raht_enable_inter_intra_layer_RDO
       && enableACInterPred && enablePredictionInLvl;
 
-    enableACRDONonPred =
-      rahtPredParams.raht_enable_intraPred_nonPred_code_layer && enablePredictionInLvl;
+	enableACRDONonPred = enablePredictionInLvl
+      ? rahtPredParams.raht_enable_intraPred_nonPred_code_layer
+      : false;
 
     const bool& enableRDOCodingLayer = enableACRDOInterPred || enableACRDONonPred;
 
