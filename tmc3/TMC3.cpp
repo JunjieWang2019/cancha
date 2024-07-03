@@ -1174,6 +1174,13 @@ ParseParameters(int argc, char* argv[], Parameters& params)
     "Maxium distance (in pictures) between I-frame and P-frame when "
     "encoding a sequence using bi-direction inter prediction")  
 
+  ("downsamplingRange",
+    params.encoder.gps.dn_sampling_range, -1,
+    "Downsampling range applied to reference frame: "
+    " -1: downsampling is disabled\n"
+    "  0: downsampling occurs for points with the same attribute and at the same position\n"
+	"  greater than 0: downsampling occurs for points with the same attribute and laser index within the range")
+
   ("globalMotionEnabled",
     params.encoder.gps.globalMotionEnabled, false,
     "Enable global motion compensation for inter prediction")
@@ -1975,6 +1982,9 @@ sanitizeEncoderOpts(
     || !params.encoder.gps.geom_angular_mode_enabled_flag) {
     params.encoder.gps.geom_z_compensation_enabled_flag = false;
   }
+
+  if (params.encoder.gps.maxPointsPerEntryMinus1 == 0)
+    params.encoder.gps.dn_sampling_range = -1;
 
   // Separate bypass bin coding only when cabac_bypass_stream is disabled
   if (params.encoder.sps.cabac_bypass_stream_enabled_flag)

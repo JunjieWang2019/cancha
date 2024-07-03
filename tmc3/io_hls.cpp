@@ -778,6 +778,8 @@ write(const SequenceParameterSet& sps, const GeometryParameterSet& gps)
         bs.writeUe(gps.interAzimScaleLog2);
         bs.write(gps.resamplingEnabled);
         bs.writeUe(gps.maxPointsPerEntryMinus1);
+        if (gps.maxPointsPerEntryMinus1 > 0)
+          bs.writeUe(gps.dn_sampling_range + 1);
       }
       bs.writeUe(gps.biPredictionEnabledFlag);
       if (gps.biPredictionEnabledFlag)
@@ -957,6 +959,7 @@ parseGps(const PayloadBuffer& buf)
   gps.residual2_disabled_flag = false;
   gps.geom_octree_depth_planar_eligibiity_enabled_flag = false;
   gps.geom_octree_planar_dynamic_obuf_eligibiity_enabled_flag = false;
+  gps.dn_sampling_range = 0;
   bool gps_extension_flag = bs.read();
   if (gps_extension_flag) {
     if(!gps.predgeom_enabled_flag)
@@ -980,6 +983,9 @@ parseGps(const PayloadBuffer& buf)
         bs.readUe(&gps.interAzimScaleLog2);
         bs.read(&gps.resamplingEnabled);
         bs.readUe(&gps.maxPointsPerEntryMinus1);
+        if (gps.maxPointsPerEntryMinus1 > 0)
+          bs.readUe(&gps.dn_sampling_range);
+        gps.dn_sampling_range--;
       }
       bs.readUe(&gps.biPredictionEnabledFlag);
       if (gps.biPredictionEnabledFlag)

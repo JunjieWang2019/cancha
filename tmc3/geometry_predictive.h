@@ -427,12 +427,14 @@ public:
       refPointValsCur[pt[2]].insert({computePhiQuantized(pt[1]), {pt}});
     }
   }
-  void insert(const GeometryParameterSet& gps, const CloudFrame& refFrame)
+  void insert(const GeometryParameterSet& gps, const CloudFrame& refFrame, pcc::point_t coordScale)
   {
     assert(numLasers > 0);
     const CartesianToSphericalSimple cartToSpherical(gps);
     const auto& cloud = refFrame.cloud;
     const int numPts = cloud.getPointCount();
+    int dnRadiusRange =  gps.dn_sampling_range * (coordScale[0] >> 8);
+    int dnAzimuthRange = gps.dn_sampling_range;
     for (auto i = 0; i < numPts; i++) {
       auto pt = cloud[i];
       auto& refPointCurLaser = refPointValsCur[pt[2]];
@@ -440,8 +442,15 @@ public:
       const auto phiQ = computePhiQuantized(pt[1]);
       if (!_maxPointsPerEntryMinus1 || !refPointCurLaser.count(phiQ))
         refPointCurLaser.insert({phiQ, {pt}});
-      else if (refPointCurLaser[phiQ].size() <= _maxPointsPerEntryMinus1)
-        refPointCurLaser[phiQ].push_back(pt);
+      else if (refPointCurLaser[phiQ].size() <= _maxPointsPerEntryMinus1) {
+        int n = refPointCurLaser[phiQ].size() - 1;
+        auto latest_pt = refPointCurLaser[phiQ][n];
+        if (latest_pt[2] == pt[2]) {
+          if ((abs(latest_pt[0] - pt[0]) > dnRadiusRange) || (abs(latest_pt[1] - pt[1]) > dnAzimuthRange))
+            refPointCurLaser[phiQ].push_back(pt);
+        } else
+          refPointCurLaser[phiQ].push_back(pt);
+      }
     }
   }
 
@@ -536,7 +545,7 @@ public:
     pcc::point_t coordScale = 1)
   {
     clearRefFrameCur();
-    insert(gps, refFrameAlt);
+    insert(gps, refFrameAlt, coordScale);
     {
       int ctr = 0;
       for (auto laserId = 0; laserId < numLasers; laserId++) {      
