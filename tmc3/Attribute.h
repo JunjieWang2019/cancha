@@ -76,6 +76,18 @@ public:
   virtual bool isReusable(
     const AttributeParameterSet& aps,
     const AttributeBrickHeader& abh) const = 0;
+
+  virtual void setRefReusable( const Vec3<int> attr_coord_scale,
+  const bool predgeom_enabled_flag,
+  const int geom_angular_azimuth_scale_log2_minus11,
+  const bool enableAttrInterPred,
+    const bool enableAttrInterPred2) = 0;
+
+  virtual bool isRefReusable( const Vec3<int> attr_coord_scale,
+  const bool predgeom_enabled_flag,
+  const int geom_angular_azimuth_scale_log2_minus11,
+  const bool enableAttrInterPred,
+    const bool enableAttrInterPred2) const = 0;
   
   virtual AttributeLods& getLods() = 0;
   virtual std::vector<uint32_t>& getIndexes() = 0;
@@ -109,6 +121,18 @@ public:
   virtual bool isReusable(
     const AttributeParameterSet& aps,
     const AttributeBrickHeader& abh) const = 0;
+
+  virtual void setRefReusable( const Vec3<int> attr_coord_scale,
+  const bool predgeom_enabled_flag,
+  const int geom_angular_azimuth_scale_log2_minus11,
+  const bool enableAttrInterPred,
+    const bool enableAttrInterPred2) = 0;
+
+  virtual bool isRefReusable( const Vec3<int> attr_coord_scale,
+  const bool predgeom_enabled_flag,
+  const int geom_angular_azimuth_scale_log2_minus11,
+  const bool enableAttrInterPred,
+    const bool enableAttrInterPred2) const = 0;
 
   virtual AttributeLods& getLods() = 0;
   virtual std::vector<uint32_t>& getIndexes() = 0;

@@ -290,6 +290,8 @@ AttributeDecoder::decode(
             pointCloud, _lods.indexes, attrInterPredParams);
     }
   }
+ 
+  firstAttributeInSlice = abh.firstAttributeInSlice;
 
   if (attr_desc.attr_num_dimensions_minus1 == 0) {
     switch (attr_aps.attr_encoding) {
@@ -356,6 +358,47 @@ AttributeDecoder::isReusable(
 {
   return _lods.isReusable(aps, abh);
 }
+
+//----------------------------------------------------------------------------
+
+void
+AttributeDecoder::setRefReusable( const Vec3<int> Attr_coord_scale,
+  const bool Predgeom_enabled_flag,
+  const int Geom_angular_azimuth_scale_log2_minus11,
+  const bool EnableAttrInterPred,
+  const bool EnableAttrInterPred2
+  ) 
+{
+  attr_coord_scale = Attr_coord_scale;
+  predgeom_enabled_flag = Predgeom_enabled_flag;
+  geom_angular_azimuth_scale_log2_minus11 = Geom_angular_azimuth_scale_log2_minus11;
+  enableAttrInterPred = EnableAttrInterPred;
+  enableAttrInterPred2 = EnableAttrInterPred2;
+}
+
+//----------------------------------------------------------------------------
+
+bool
+AttributeDecoder::isRefReusable( const Vec3<int> Attr_coord_scale,
+  const bool Predgeom_enabled_flag,
+  const int Geom_angular_azimuth_scale_log2_minus11,
+  const bool EnableAttrInterPred,
+  const bool EnableAttrInterPred2
+  ) const
+{
+  if(attr_coord_scale != Attr_coord_scale)
+    return false;
+  if(predgeom_enabled_flag != Predgeom_enabled_flag)
+    return false;
+  if(geom_angular_azimuth_scale_log2_minus11 != Geom_angular_azimuth_scale_log2_minus11)
+    return false;
+  if(enableAttrInterPred != EnableAttrInterPred)
+    return false;
+  if (enableAttrInterPred2 != EnableAttrInterPred2)
+    return false;
+  return true;
+}
+
 
 //----------------------------------------------------------------------------
 AttributeLods&
@@ -704,23 +747,23 @@ AttributeDecoder::decodeReflectancesRaht(
   ModeDecoder& predDecoder)
 {
   const int voxelCount = int(pointCloud.getPointCount());
-  std::vector<MortonCodeWithIndex> packedVoxel(voxelCount);
-  for (int n = 0; n < voxelCount; n++) {
-    packedVoxel[n].mortonCode = mortonAddr(pointCloud[n]);
-    packedVoxel[n].index = n;
+  if(firstAttributeInSlice){
+    packedVoxel.resize(voxelCount);
+    for (int n = 0; n < voxelCount; n++) {
+      packedVoxel[n].mortonCode = mortonAddr(pointCloud[n]);
+      packedVoxel[n].index = n;
+    }
+    sort(packedVoxel.begin(), packedVoxel.end());    
+    mortonCode.resize(voxelCount);  
+    pointQpOffsets.resize(voxelCount);
+    for (int n = 0; n < voxelCount; n++) {
+      mortonCode[n] = packedVoxel[n].mortonCode;
+      pointQpOffsets[n] = qpSet.regionQpOffset(pointCloud[packedVoxel[n].index]);     
+    }
   }
-  sort(packedVoxel.begin(), packedVoxel.end());
-
-  // Morton codes
-  std::vector<int64_t> mortonCode(voxelCount);
-  for (int n = 0; n < voxelCount; n++) {
-    mortonCode[n] = packedVoxel[n].mortonCode;
-  }
-
   // Entropy decode
   const int attribCount = 1;
   std::vector<int> coefficients(attribCount * voxelCount);
-  std::vector<Qps> pointQpOffsets(voxelCount);
  
   int zeroRunRem = 0;
   for (int n = 0; n < voxelCount; ++n) {
@@ -730,10 +773,8 @@ AttributeDecoder::decodeReflectancesRaht(
     uint32_t value = 0;
     if (!zeroRunRem)
       value = decoder.decode();
-      coefficients[n] = value;
-      pointQpOffsets[n] = qpSet.regionQpOffset(pointCloud[packedVoxel[n].index]);
+    coefficients[n] = value;
   }
-  
 
   std::vector<int> attributes(attribCount * voxelCount);
   bool enableACRDOInterLayer = aps.raht_enable_code_layer && attrInterPredParams.enableAttrInterPred;
@@ -745,29 +786,32 @@ AttributeDecoder::decodeReflectancesRaht(
       predDecoder.set(&decoder.arithmeticDecoder);
     const int voxelCount_ref = int(attrInterPredParams.getPointCount());
     attrInterPredParams.paramsForInterRAHT.voxelCount = voxelCount_ref;
-    std::vector<MortonCodeWithIndex> packedVoxel_ref(voxelCount_ref);
-    for (int n = 0; n < voxelCount_ref; n++) {
-      if (attrInterPredParams.useRefCloudIndex) {
-        const int idx = attrInterPredParams.refPointCloudIndices[n];
-        packedVoxel_ref[n].mortonCode =
-          mortonAddr((*attrInterPredParams.refIndexCloud)[idx]);
-      } else
-        packedVoxel_ref[n].mortonCode =
-          mortonAddr(attrInterPredParams.referencePointCloud[n]);
-      packedVoxel_ref[n].index = n;
+    if(firstAttributeInSlice){
+      attrInterPredParams.paramsForInterRAHT.packedVoxel.resize(voxelCount_ref);
+      for (int n = 0; n < voxelCount_ref; n++) {
+        if (attrInterPredParams.useRefCloudIndex) {
+          const int idx = attrInterPredParams.refPointCloudIndices[n];
+          attrInterPredParams.paramsForInterRAHT.packedVoxel[n].mortonCode =
+            mortonAddr((*attrInterPredParams.refIndexCloud)[idx]);
+        } else
+          attrInterPredParams.paramsForInterRAHT.packedVoxel[n].mortonCode =
+            mortonAddr(attrInterPredParams.referencePointCloud[n]);
+        attrInterPredParams.paramsForInterRAHT.packedVoxel[n].index = n;
+      }
+      sort(attrInterPredParams.paramsForInterRAHT.packedVoxel.begin(), attrInterPredParams.paramsForInterRAHT.packedVoxel.end());
+      attrInterPredParams.paramsForInterRAHT.mortonCode.resize(voxelCount_ref);
+      for (int n = 0; n < voxelCount_ref; n++) {      
+        attrInterPredParams.paramsForInterRAHT.mortonCode[n] =
+          attrInterPredParams.paramsForInterRAHT.packedVoxel[n].mortonCode;
+      }       
     }
 
-    sort(packedVoxel_ref.begin(), packedVoxel_ref.end());
-
-    attrInterPredParams.paramsForInterRAHT.mortonCode.resize(voxelCount_ref);
     attrInterPredParams.paramsForInterRAHT.attributes.resize(
       attribCount * voxelCount_ref);
     // Populate input arrays.
     for (int n = 0; n < voxelCount_ref; n++) {
-      attrInterPredParams.paramsForInterRAHT.mortonCode[n] =
-        packedVoxel_ref[n].mortonCode;
       attrInterPredParams.paramsForInterRAHT.attributes[n] =
-        attrInterPredParams.getReflectance(packedVoxel_ref[n].index);
+        attrInterPredParams.getReflectance(attrInterPredParams.paramsForInterRAHT.packedVoxel[n].index);
     }
   }
   else {
@@ -775,12 +819,10 @@ AttributeDecoder::decodeReflectancesRaht(
       predDecoder.set(&decoder.arithmeticDecoder);
     }
   }
-
   regionAdaptiveHierarchicalInverseTransform(
     aps.rahtPredParams, qpSet, pointQpOffsets.data(), mortonCode.data(),
     attributes.data(), attribCount, voxelCount, coefficients.data(),
     aps.raht_extension, attrInterPredParams,predDecoder);
-
   const int64_t maxReflectance = (1 << (int64_t)desc.bitdepth) - 1;
   const int64_t minReflectance = 0;
   for (int n = 0; n < voxelCount; n++) {
@@ -805,23 +847,25 @@ AttributeDecoder::decodeColorsRaht(
   ModeDecoder& predDecoder)
 {
   const int voxelCount = int(pointCloud.getPointCount());
-  std::vector<MortonCodeWithIndex> packedVoxel(voxelCount);
-  for (int n = 0; n < voxelCount; n++) {
-    packedVoxel[n].mortonCode = mortonAddr(pointCloud[n]);
-    packedVoxel[n].index = n;
-  }
-  sort(packedVoxel.begin(), packedVoxel.end());
 
-  // Morton codes
-  std::vector<int64_t> mortonCode(voxelCount);
-  for (int n = 0; n < voxelCount; n++) {
-    mortonCode[n] = packedVoxel[n].mortonCode;
+  if(firstAttributeInSlice){
+    packedVoxel.resize(voxelCount);
+    for (int n = 0; n < voxelCount; n++) {
+      packedVoxel[n].mortonCode = mortonAddr(pointCloud[n]);
+      packedVoxel[n].index = n;
+    }
+    sort(packedVoxel.begin(), packedVoxel.end());    
+    mortonCode.resize(voxelCount);  
+    pointQpOffsets.resize(voxelCount);
+    for (int n = 0; n < voxelCount; n++) {
+      mortonCode[n] = packedVoxel[n].mortonCode;
+      pointQpOffsets[n] = qpSet.regionQpOffset(pointCloud[packedVoxel[n].index]);     
+    }
   }
 
   // Entropy decode
   const int attribCount = 3;
   std::vector<int> coefficients(attribCount * voxelCount);
-  std::vector<Qps> pointQpOffsets(voxelCount);
 
   int zeroRunRem = 0;
   for (int n = 0; n < voxelCount; ++n) {
@@ -835,7 +879,6 @@ AttributeDecoder::decodeColorsRaht(
     for (int d = 0; d < attribCount; ++d) {
       coefficients[voxelCount * d + n] = values[d];
     }
-    pointQpOffsets[n] = qpSet.regionQpOffset(pointCloud[packedVoxel[n].index]);
   }
 
   std::vector<int> attributes(attribCount * voxelCount);
@@ -848,28 +891,38 @@ AttributeDecoder::decodeColorsRaht(
 
     const int voxelCount_ref = int(attrInterPredParams.getPointCount());
     attrInterPredParams.paramsForInterRAHT.voxelCount = voxelCount_ref;
-    std::vector<MortonCodeWithIndex> packedVoxel_ref(voxelCount_ref);
-    for (int n = 0; n < voxelCount_ref; n++) {
-      if (attrInterPredParams.useRefCloudIndex) {
-        const int idx = attrInterPredParams.refPointCloudIndices[n];
-        packedVoxel_ref[n].mortonCode =
-          mortonAddr((*attrInterPredParams.refIndexCloud)[idx]);
-      } else
-        packedVoxel_ref[n].mortonCode =
-          mortonAddr(attrInterPredParams.referencePointCloud[n]);
-      packedVoxel_ref[n].index = n;
-    }
 
-    sort(packedVoxel_ref.begin(), packedVoxel_ref.end());
+    if(firstAttributeInSlice){
+      attrInterPredParams.paramsForInterRAHT.packedVoxel.resize(voxelCount_ref);
+      for (int n = 0; n < voxelCount_ref; n++) {
+        if (attrInterPredParams.useRefCloudIndex) {
+          const int idx = attrInterPredParams.refPointCloudIndices[n];
+          attrInterPredParams.paramsForInterRAHT.packedVoxel[n].mortonCode =
+            mortonAddr((*attrInterPredParams.refIndexCloud)[idx]);
+        } else
+          attrInterPredParams.paramsForInterRAHT.packedVoxel[n].mortonCode =
+            mortonAddr(attrInterPredParams.referencePointCloud[n]);
+        attrInterPredParams.paramsForInterRAHT.packedVoxel[n].index = n;
+      }
 
-    attrInterPredParams.paramsForInterRAHT.mortonCode.resize(voxelCount_ref);
+      sort(
+        attrInterPredParams.paramsForInterRAHT.packedVoxel.begin(),
+        attrInterPredParams.paramsForInterRAHT.packedVoxel.end());
+
+      attrInterPredParams.paramsForInterRAHT.mortonCode.resize(voxelCount_ref);
+
+	  for (int n = 0; n < voxelCount_ref; n++) {
+        attrInterPredParams.paramsForInterRAHT.mortonCode[n] =
+          attrInterPredParams.paramsForInterRAHT.packedVoxel[n].mortonCode;
+      }
+	}
+
     attrInterPredParams.paramsForInterRAHT.attributes.resize(attribCount * voxelCount_ref);
 
     // Populate input arrays.
     for (int n = 0; n < voxelCount_ref; n++) {
-      attrInterPredParams.paramsForInterRAHT.mortonCode[n] =
-        packedVoxel_ref[n].mortonCode;
-      auto color = attrInterPredParams.getColor(packedVoxel_ref[n].index);
+
+      auto color = attrInterPredParams.getColor(attrInterPredParams.paramsForInterRAHT.packedVoxel[n].index);
 
       attrInterPredParams.paramsForInterRAHT.attributes[attribCount * n] = color[0];
       attrInterPredParams.paramsForInterRAHT.attributes[attribCount * n + 1] = color[1];

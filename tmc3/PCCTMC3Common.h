@@ -305,6 +305,7 @@ struct AttributeInterPredParamsForRAHT {
   AttributeInterPredBufRAHT bufForInterRAHT;
   PredBufRAHT* cur;
   PredBufRAHT* ref;
+  std::vector<MortonCodeWithIndex> packedVoxel;  
 
   void swapBuffersRef(const int numAttrDimMinus1)
   {

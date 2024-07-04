@@ -163,6 +163,8 @@ private:
   // The accumulated decoded slices
   PCCPointSet3 _accumCloud;
 
+  std::vector<point_t> altPositions;
+
   // The accumulated decoded slices in spherical corrdinates
   PCCPointSet3 _accumCloudAltPositions;
 
@@ -225,7 +227,7 @@ private:
   BiPredictionDecodeParams biPredDecodeParams;
   HierarchicalGOFParams hGOFDecodeParams;
 
-
+  bool firstAttributeInSlice;
   
   LayerGroupHandler _gHandler;
   std::vector<PCCPointSet3> _subgroupPointCloud;

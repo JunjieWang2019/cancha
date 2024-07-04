@@ -1104,6 +1104,8 @@ struct AttributeBrickHeader {
   int subgroup_weight_adj_coeff_b_bits_minus1;
 	int64_t subgroup_weight_adj_coeff_a;
 	int64_t subgroup_weight_adj_coeff_b;
+
+  bool firstAttributeInSlice = true;
 };
 
 //============================================================================

@@ -279,6 +279,21 @@ AttributeLods::isReusable(
     != aps.pred_weight_blending_enabled_flag)
     return false;
 
+  if (_aps.attrInterPredictionEnabled != aps.attrInterPredictionEnabled)
+    return false;
+
+  if (_abh.enableAttrInterPred != abh.enableAttrInterPred)
+    return false;
+
+  if (_abh.enableAttrInterPred2 != abh.enableAttrInterPred2)
+    return false;
+
+  if (_aps.attrInterPredSearchRange != aps.attrInterPredSearchRange)
+    return false;
+
+  if (_aps.predictionWithDistributionEnabled != aps.predictionWithDistributionEnabled)
+    return false;
+
   return true;
 }
 

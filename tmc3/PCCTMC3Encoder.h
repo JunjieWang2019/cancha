@@ -261,6 +261,8 @@ private:
   // Point positions in spherical coordinates of the current slice
   std::vector<point_t> _posSph;
 
+  std::vector<point_t> altPositions;
+
   // Point positions in spherical coordinates of the current slice
   std::vector<point_t> _refPosSph;
 

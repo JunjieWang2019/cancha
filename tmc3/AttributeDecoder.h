@@ -72,6 +72,20 @@ public:
   bool isReusable(
     const AttributeParameterSet& aps,
     const AttributeBrickHeader& abh) const override;
+
+  void setRefReusable( const Vec3<int> attr_coord_scale,
+  const bool predgeom_enabled_flag,
+  const int geom_angular_azimuth_scale_log2_minus11,
+  const bool enableAttrInterPred,
+    const bool enableAttrInterPred2) override;
+
+  bool isRefReusable( const Vec3<int> attr_coord_scale,
+  const bool predgeom_enabled_flag,
+  const int geom_angular_azimuth_scale_log2_minus11,
+  const bool enableAttrInterPred,
+    const bool enableAttrInterPred2) const override;
+
+
   
   AttributeLods& getLods() override;
   std::vector<uint32_t>& getIndexes() override;
@@ -155,6 +169,16 @@ private:
   AttributeLods _lods;
   std::vector<uint32_t> _pointIndexToPredictorIndex;
   bool _canonical_lod_sampling_enabled_flag;
+  std::vector<MortonCodeWithIndex> packedVoxel;
+  std::vector<int64_t> mortonCode;
+  std::vector<Qps> pointQpOffsets;
+  bool firstAttributeInSlice;
+  
+  Vec3<int> attr_coord_scale;
+  bool predgeom_enabled_flag;
+  int geom_angular_azimuth_scale_log2_minus11;
+  bool enableAttrInterPred;
+  bool enableAttrInterPred2;
 };
 
 //============================================================================

@@ -863,6 +863,8 @@ PCCTMC3Decoder3::decodeGeometryBrick(const PayloadBuffer& buf)
             << total_user.count() / 1000.0 << " s\n";
   std::cout << std::endl;
 
+  firstAttributeInSlice = true;
+
   return 0;
 }
 
@@ -1130,11 +1132,12 @@ PCCTMC3Decoder3::decodeAttributeBrick(const PayloadBuffer& buf)
 
   } 
 
-  
+
   // replace the attribute decoder if not compatible
-  if (!_attrDecoder || !_attrDecoder->isReusable(attr_aps, abh) || _prevArrayIdx != curArrayIdx ){
+  bool differentArray = _sps->layer_group_enabled_flag && attr_aps.layer_group_enabled_flag 
+                          && _prevArrayIdx != curArrayIdx;
+  if (!_attrDecoder || !_attrDecoder->isReusable(attr_aps, abh) || differentArray){
     _attrDecoder = makeAttributeDecoder();
-  
   }
 
   clock_user.start();
@@ -1164,157 +1167,163 @@ PCCTMC3Decoder3::decodeAttributeBrick(const PayloadBuffer& buf)
   else{
       // Convert cartesian positions to spherical for use in attribute coding.
     // NB: this retains the original cartesian positions to restore afterwards
-    std::vector<pcc::point_t> altPositions;
+
     if (attr_aps.spherical_coord_flag) {
       // If predgeom was used, re-use the internal positions rather than
       // calculating afresh.
-      Box3<int> bboxRpl;
+      if(firstAttributeInSlice || !_attrDecoder->isRefReusable(attr_aps.attr_coord_scale, _gps->predgeom_enabled_flag, _gps->geom_angular_azimuth_scale_log2_minus11,
+           abh.enableAttrInterPred, abh.enableAttrInterPred2)) {
+        Box3<int> bboxRpl;
 
-      pcc::point_t minPos = 0;
+        pcc::point_t minPos = 0;
 
-    if (_gps->predgeom_enabled_flag) {
-      altPositions = _posSph;
-      bboxRpl = Box3<int>(altPositions.begin(), altPositions.end());
-      minPos = bboxRpl.min;
-      if (
-        attrInterPredParams.enableAttrInterPred
-        && attr_aps.attr_encoding == AttributeEncoding::kRAHTransform) {
+        if (_gps->predgeom_enabled_flag) {
+          altPositions = _posSph;
+          bboxRpl = Box3<int>(altPositions.begin(), altPositions.end());
+          minPos = bboxRpl.min;
+          if (
+            attrInterPredParams.enableAttrInterPred
+            && attr_aps.attr_encoding == AttributeEncoding::kRAHTransform) {
+            if (attrInterPredParams.useRefCloudIndex) {
+              attrInterPredParams.refIndexCloud = &(_refFrameAlt->cloud);
+              auto& indices = attrInterPredParams.refPointCloudIndices;
+              indices.resize(attrInterPredParams.refIndexCloud->getPointCount());
+              int ctr = 0;
+              for (auto it = indices.begin(); it != indices.end(); it++)
+                *it = ctr++;
+            } else
+              attrInterPredParams.referencePointCloud = _refFrameAlt->cloud;
+          }
+          if (
+            attrInterPredParams.enableAttrInterPred
+            || biPredDecodeParams.attrInterPredParams2.enableAttrInterPred) {
+            for (auto i = 0; i < 3; i++)
+              minPos[i] = minPos[i] < minPos_ref[i] ? minPos[i] : minPos_ref[i];
+            auto minPos_shift = minPos_ref - minPos;
+
+            if (
+              (minPos_shift[0] || minPos_shift[1] || minPos_shift[2])
+              && attr_aps.attr_encoding == AttributeEncoding::kRAHTransform) {
+              if (attrInterPredParams.useRefCloudIndex)
+                offsetAndScaleShift(
+                  minPos_shift, attr_aps.attr_coord_scale,
+                  attrInterPredParams.refIndexCloud,
+                  &attrInterPredParams.refPointCloudIndices[0],
+                  &attrInterPredParams.refPointCloudIndices[0]
+                    + attrInterPredParams.getPointCount());
+              else
+                offsetAndScaleShift(
+                  minPos_shift, attr_aps.attr_coord_scale,
+                  &attrInterPredParams.referencePointCloud[0],
+                  &attrInterPredParams.referencePointCloud[0]
+                    + attrInterPredParams.getPointCount());
+            }
+          }
+          minPos_ref = minPos;
+        } else {
+          altPositions.resize(_currentPointCloud.getPointCount());
+
+          auto laserOrigin = _gbh.geomAngularOrigin(*_gps);
+          bboxRpl = convertXyzToRpl(
+            laserOrigin, _gps->angularTheta.data(), _gps->angularTheta.size(),
+            &_currentPointCloud[0],
+            &_currentPointCloud[0] + _currentPointCloud.getPointCount(),
+            altPositions.data());
+
+          if(!attr_aps.attrInterPredictionEnabled){
+            minPos = bboxRpl.min;
+          }
+        }
+
+        offsetAndScale(
+          minPos, attr_aps.attr_coord_scale, altPositions.data(),
+          altPositions.data() + altPositions.size());   
+          
+        _attrDecoder->setRefReusable(attr_aps.attr_coord_scale, _gps->predgeom_enabled_flag, _gps->geom_angular_azimuth_scale_log2_minus11,
+          abh.enableAttrInterPred, abh.enableAttrInterPred2);     
+      }
+      _currentPointCloud.swapPoints(altPositions);
+    }
+
+    if (!attr_aps.spherical_coord_flag && attr_aps.attrInterPredictionEnabled)
+      for (auto i = 0; i < _currentPointCloud.getPointCount(); i++)
+        _currentPointCloud[i] += _sliceOrigin;
+
+    if (attr_aps.attrInterPredictionEnabled && firstAttributeInSlice) {
+      if (_refFrameAlt) {
+        Box3<int> currentFrameBox = _currentPointCloud.computeBoundingBox();
         if (attrInterPredParams.useRefCloudIndex) {
           attrInterPredParams.refIndexCloud = &(_refFrameAlt->cloud);
           auto& indices = attrInterPredParams.refPointCloudIndices;
           indices.resize(attrInterPredParams.refIndexCloud->getPointCount());
+          const int numPts =
+        attrInterPredParams.refIndexCloud->getPointCount();
           int ctr = 0;
-          for (auto it = indices.begin(); it != indices.end(); it++)
-            *it = ctr++;
-        } else
-          attrInterPredParams.referencePointCloud = _refFrameAlt->cloud;
-      }
-      if (
-        attrInterPredParams.enableAttrInterPred
-        || biPredDecodeParams.attrInterPredParams2.enableAttrInterPred) {
-        for (auto i = 0; i < 3; i++)
-          minPos[i] = minPos[i] < minPos_ref[i] ? minPos[i] : minPos_ref[i];
-        auto minPos_shift = minPos_ref - minPos;
-
-        if (
-          (minPos_shift[0] || minPos_shift[1] || minPos_shift[2])
-          && attr_aps.attr_encoding == AttributeEncoding::kRAHTransform) {
-          if (attrInterPredParams.useRefCloudIndex)
-            offsetAndScaleShift(
-              minPos_shift, attr_aps.attr_coord_scale,
-              attrInterPredParams.refIndexCloud,
-              &attrInterPredParams.refPointCloudIndices[0],
-              &attrInterPredParams.refPointCloudIndices[0]
-                + attrInterPredParams.getPointCount());
-          else
-            offsetAndScaleShift(
-              minPos_shift, attr_aps.attr_coord_scale,
-              &attrInterPredParams.referencePointCloud[0],
-              &attrInterPredParams.referencePointCloud[0]
-                + attrInterPredParams.getPointCount());
-        }
-      }
-      minPos_ref = minPos;
-    } else {
-      altPositions.resize(_currentPointCloud.getPointCount());
-
-      auto laserOrigin = _gbh.geomAngularOrigin(*_gps);
-      bboxRpl = convertXyzToRpl(
-        laserOrigin, _gps->angularTheta.data(), _gps->angularTheta.size(),
-        &_currentPointCloud[0],
-        &_currentPointCloud[0] + _currentPointCloud.getPointCount(),
-        altPositions.data());
-
-      if(!attr_aps.attrInterPredictionEnabled){
-        minPos = bboxRpl.min;
-      }
-    }
-
-    offsetAndScale(
-      minPos, attr_aps.attr_coord_scale, altPositions.data(),
-      altPositions.data() + altPositions.size());
-
-    _currentPointCloud.swapPoints(altPositions);
-  }
-
-  if (!attr_aps.spherical_coord_flag && attr_aps.attrInterPredictionEnabled)
-    for (auto i = 0; i < _currentPointCloud.getPointCount(); i++)
-      _currentPointCloud[i] += _sliceOrigin;
-
-  if (attr_aps.attrInterPredictionEnabled) {
-    if (_refFrameAlt) {
-      Box3<int> currentFrameBox = _currentPointCloud.computeBoundingBox();
-      if (attrInterPredParams.useRefCloudIndex) {
-        attrInterPredParams.refIndexCloud = &(_refFrameAlt->cloud);
-        auto& indices = attrInterPredParams.refPointCloudIndices;
-        indices.resize(attrInterPredParams.refIndexCloud->getPointCount());
-        const int numPts =
-			attrInterPredParams.refIndexCloud->getPointCount();
-        int ctr = 0;
-        for (auto i = 0; i < numPts; i++) {
-          auto& p = (*(attrInterPredParams.refIndexCloud))[i];
-          if (currentFrameBox.contains(p))
-            indices[ctr++] = i;
-        }
-        indices.resize(ctr);
-      } else {
-        if (attr_aps.spherical_coord_flag && !_gps->biPredictionEnabledFlag)
-          attrInterPredParams.referencePointCloud = _refFrameAlt->cloud;
-        int count = 0;
-        auto& cloudTmp = attrInterPredParams.referencePointCloud;
-        for (int i = 0; i < attrInterPredParams.getPointCount(); i++) {
-          point_t p = cloudTmp[i];
-          if (currentFrameBox.contains(p)) {
-            cloudTmp[count] = p;
-            if (cloudTmp.hasReflectances())
-              cloudTmp.setReflectance(count, cloudTmp.getReflectance(i));
-            if (cloudTmp.hasColors())
-              cloudTmp.setColor(count, cloudTmp.getColor(i));
-            count++;
+          for (auto i = 0; i < numPts; i++) {
+            auto& p = (*(attrInterPredParams.refIndexCloud))[i];
+            if (currentFrameBox.contains(p))
+              indices[ctr++] = i;
           }
+          indices.resize(ctr);
+        } else {
+          if (attr_aps.spherical_coord_flag && !_gps->biPredictionEnabledFlag)
+            attrInterPredParams.referencePointCloud = _refFrameAlt->cloud;
+          int count = 0;
+          auto& cloudTmp = attrInterPredParams.referencePointCloud;
+          for (int i = 0; i < attrInterPredParams.getPointCount(); i++) {
+            point_t p = cloudTmp[i];
+            if (currentFrameBox.contains(p)) {
+              cloudTmp[count] = p;
+              if (cloudTmp.hasReflectances())
+                cloudTmp.setReflectance(count, cloudTmp.getReflectance(i));
+              if (cloudTmp.hasColors())
+                cloudTmp.setColor(count, cloudTmp.getColor(i));
+              count++;
+            }
+          }
+          cloudTmp.resize(count);
         }
-        cloudTmp.resize(count);
       }
     }
-  }
 
-  if (_gps->predgeom_enabled_flag && !attr_aps.canonical_point_order_flag) {
-    _attrDecoder->canonical_lod_sampling_enabled_flag() = true;
-  }
-  else {
-    _attrDecoder->canonical_lod_sampling_enabled_flag() = false;
-  }
+    if (_gps->predgeom_enabled_flag && !attr_aps.canonical_point_order_flag) {
+      _attrDecoder->canonical_lod_sampling_enabled_flag() = true;
+    }
+    else {
+      _attrDecoder->canonical_lod_sampling_enabled_flag() = false;
+    }
 
-  auto& ctxtMemAttr = _ctxtMemAttrs.at(abh.attr_sps_attr_idx);
-  AttributeGranularitySlicingParam slicingParam;
-  _attrDecoder->decode(
-    *_sps, attr_sps, attr_aps, abh, _gbh.footer.geom_num_points_minus1,
-    _params.minGeomNodeSizeLog2, buf.data() + abhSize, buf.size() - abhSize,
-    ctxtMemAttr, _currentPointCloud, attrInterPredParams, slicingParam, predDecoder);
+    auto& ctxtMemAttr = _ctxtMemAttrs.at(abh.attr_sps_attr_idx);
+    abh.firstAttributeInSlice = firstAttributeInSlice;
+    AttributeGranularitySlicingParam slicingParam;
+    _attrDecoder->decode(
+      *_sps, attr_sps, attr_aps, abh, _gbh.footer.geom_num_points_minus1,
+      _params.minGeomNodeSizeLog2, buf.data() + abhSize, buf.size() - abhSize,
+      ctxtMemAttr, _currentPointCloud, attrInterPredParams, slicingParam, predDecoder);
 
-  if (attr_aps.spherical_coord_flag && _gps->predgeom_enabled_flag)
-    _accumCloudAltPositions.append(_currentPointCloud, _posSph);
-  else
-    _accumCloudAltPositions.append(_currentPointCloud);
+    if (attr_aps.spherical_coord_flag && _gps->predgeom_enabled_flag)
+      _accumCloudAltPositions.append(_currentPointCloud, _posSph);
+    else
+      _accumCloudAltPositions.append(_currentPointCloud);
 
-  bool currFrameNotCodedAsB =
-    (_gps->biPredictionEnabledFlag && !_gbh.biPredictionEnabledFlag);
-  auto& refCloud = currFrameNotCodedAsB
-    ? biPredDecodeParams.attrInterPredParams2.referencePointCloud
-    : attrInterPredParams.referencePointCloud;
+    bool currFrameNotCodedAsB =
+      (_gps->biPredictionEnabledFlag && !_gbh.biPredictionEnabledFlag);
+    auto& refCloud = currFrameNotCodedAsB
+      ? biPredDecodeParams.attrInterPredParams2.referencePointCloud
+      : attrInterPredParams.referencePointCloud;
 
-  if (attr_aps.spherical_coord_flag) {
-    if (!_gps->predgeom_enabled_flag)
+    if (attr_aps.spherical_coord_flag) {
+      if (!_gps->predgeom_enabled_flag)
+        refCloud = _currentPointCloud;
+      _currentPointCloud.swapPoints(altPositions);
+    } 
+    else {
       refCloud = _currentPointCloud;
-    _currentPointCloud.swapPoints(altPositions);
-  } 
-  else {
-    refCloud = _currentPointCloud;
-  }
+    }
 
-  if (!attr_aps.spherical_coord_flag && attr_aps.attrInterPredictionEnabled)
-    for (auto i = 0; i < _currentPointCloud.getPointCount(); i++)
-      _currentPointCloud[i] -= _sliceOrigin;
+    if (!attr_aps.spherical_coord_flag && attr_aps.attrInterPredictionEnabled)
+      for (auto i = 0; i < _currentPointCloud.getPointCount(); i++)
+        _currentPointCloud[i] -= _sliceOrigin;
 
   }
 
@@ -1345,6 +1354,8 @@ PCCTMC3Decoder3::decodeAttributeBrick(const PayloadBuffer& buf)
   std::cout << label
             << "s processing time (user): " << total_user.count() / 1000.0
             << " s\n";
+
+  firstAttributeInSlice = false;
   
   if (_sps->layer_group_enabled_flag && attr_aps.layer_group_enabled_flag)
     _codingtime[abh.attr_sps_attr_idx] = total_user.count()/1000.0;
