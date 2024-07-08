@@ -501,45 +501,6 @@ boundaryinsidecheck(const Vec3<int32_t> a, const int bbsize)
 
 //---------------------------------------------------------------------------
 
-bool
-rayIntersectsTriangle(
-  const Vec3<int64_t>& rayOrigin,
-  const Vec3<int64_t>& TriangleVertex0,
-  const Vec3<int64_t>& edge1,
-  const Vec3<int64_t>& edge2,
-  const Vec3<int64_t>& h,
-  int64_t a,
-  Vec3<int32_t>& outIntersectionPoint,
-  Vec3<int32_t>& outIntersectionPointUp,
-  Vec3<int32_t>& outIntersectionPointDown,
-  int direction,
-  int haloTriangle,
-  int thickness)
-{
-  Vec3<int64_t> s = rayOrigin - TriangleVertex0;
-  int64_t u = (s * h) / a;
-
-  Vec3<int64_t> q = crossProduct(s, edge1);
-  //int32_t v = (rayVector * q) / a;
-  int64_t v = q[direction] / a;
-
-  int64_t w = kTrisoupFpOne - u - v;
-
-  int64_t t = (edge2 * (q >> kTrisoupFpBits)) / a;
-  // outIntersectionPoint = rayOrigin + ((rayVector * t) >> kTrisoupFpBits);
-  outIntersectionPoint[direction] += t;
-
-  outIntersectionPointUp = outIntersectionPoint;
-  outIntersectionPointUp[direction] += thickness;
-
-  outIntersectionPointDown = outIntersectionPoint;
-  outIntersectionPointDown[direction] -= thickness;
-
-  return u >= -haloTriangle && v >= -haloTriangle && w >= -haloTriangle;
-}
-
-//---------------------------------------------------------------------------
-
 void nonCubicNode
 (
  const GeometryParameterSet& gps,
@@ -801,6 +762,24 @@ decodeTrisoupCommon(
   // in future, may override with leaf blockWidth
   const int32_t blockWidth = defaultBlockWidth;
 
+  // ray tracing parameters
+  int haloTriangle = 0;
+  int haloBit =
+    (((1 << bitDropped) - 1) << kTrisoupFpBits) / blockWidth;  // 28
+  haloBit = (haloBit * 24) / 32;
+  haloBit = haloBit > 40 ? 40 : haloBit;
+
+  if (haloFlag) {
+    if (samplingValue > 1) {
+      haloTriangle =
+        haloFlag ? (adaptiveHaloFlag ? 50 * samplingValue : 50) : 0;
+      haloTriangle = haloTriangle > 100 ? 100 : haloTriangle;
+    } else {
+      haloTriangle = haloBit;
+    }
+  }
+
+  int thickness = samplingValue > 1 ? 16 : 32;
 
   // Create list of refined pointss, one leaf at a time.
   std::vector<Vec3<int32_t>> refinedVertices;
@@ -925,15 +904,24 @@ decodeTrisoupCommon(
         }
       }
 
+      int64_t preC[4];
+      Vec3<int64_t> v0_64 = v0;
+      preC[0] = edge1[1] * edge2[2] - edge1[2] * edge2[1];
+      preC[1] = edge1[2] * edge2[0] - edge1[0] * edge2[2];
+      preC[2] = edge1[0] * edge2[1] - edge1[1] * edge2[0];
+      Vec3<int64_t> tmp = crossProduct(v0_64, edge1) >> kTrisoupFpBits;
+      preC[3] = int64_t(tmp[0]) * edge2[0] + int64_t(tmp[1]) * edge2[1]
+        + int64_t(tmp[2]) * edge2[2];
+
       // applying ray tracing along direction
       for (int direction = 0; direction < 3; direction++) {
         if (directionExcluded == direction)
           // exclude most parallel direction
           continue;
         rayTracingAlongdirection(
-          refinedVerticesBlock, direction, samplingValue, bitDropped,
-          blockWidth, nodepos, minRange, maxRange, edge1, edge2, v0,
-          haloFlag, adaptiveHaloFlag, fineRayflag);
+          refinedVerticesBlock, direction, samplingValue, blockWidth, nodepos,
+          minRange, maxRange, edge1, edge2, v0, v1, v2, haloTriangle,
+          thickness, fineRayflag, preC);
       }
     }  // end loop on triangles
 
@@ -1515,11 +1503,29 @@ int findDominantAxis(
 
 // ---------------------------------------------------------------------------
 
-void rayTracingAlongdirection(
+inline bool
+IsPointInTriangle(
+  const std::array<int64_t, 2>& P,
+  const std::array<int64_t, 2>& V0,
+  const std::array<int64_t, 2>& V1,
+  const std::array<int64_t, 2>& V2,
+  const int32_t& halo)
+{
+  return ((P[0] - V0[0]) * (V1[1] - V0[1]) - (P[1] - V0[1]) * (V1[0] - V0[0])
+          >= halo)
+    && ((P[0] - V1[0]) * (V2[1] - V1[1]) - (P[1] - V1[1]) * (V2[0] - V1[0])
+        >= halo)
+    && ((P[0] - V2[0]) * (V0[1] - V2[1]) - (P[1] - V2[1]) * (V0[0] - V2[0])
+        >= halo);
+}
+
+// ---------------------------------------------------------------------------
+
+void
+rayTracingAlongdirection(
   std::vector<Vec3<int32_t>>& refinedVerticesBlock,
   int direction,
   uint32_t samplingValue,
-  int bitDropped,
   int blockWidth,
   Vec3<int32_t> nodepos,
   int minRange[3],
@@ -1527,11 +1533,13 @@ void rayTracingAlongdirection(
   Vec3<int64_t> edge1,
   Vec3<int64_t> edge2,
   Vec3<int64_t> v0,
-  bool haloFlag,
-  bool adaptiveHaloFlag,
-  bool fineRayflag)
+  Vec3<int64_t> v1,
+  Vec3<int64_t> v2,
+  int haloTriangle,
+  int thickness,
+  bool fineRayflag,
+  int64_t preC[4])
 {
-
   // check if ray tracing is valid; if not skip the direction
   Vec3<int64_t> rayVector = 0;
   rayVector[direction] = 1 << kTrisoupFpBits;
@@ -1541,97 +1549,143 @@ void rayTracingAlongdirection(
     return;
 
   //bounds
-  const int g1pos[3] = { 1, 0, 0 };
-  const int g2pos[3] = { 2, 2, 1 };
+  const int g1pos[3] = {1, 0, 0};
+  const int g2pos[3] = {2, 2, 1};
   const int32_t startposG1 = minRange[g1pos[direction]];
   const int32_t startposG2 = minRange[g2pos[direction]];
   const int32_t endposG1 = maxRange[g1pos[direction]];
   const int32_t endposG2 = maxRange[g2pos[direction]];
   const int32_t rayStart = minRange[direction] << kTrisoupFpBits;
-  Vec3<int64_t> rayOrigin = rayStart;
+  Vec3<int32_t> rayOrigin = rayStart;
 
+  int64_t c[4];
+  c[0] = preC[0] / a;
+  c[1] = preC[1] / a;
+  c[2] = preC[2] / a;
+  c[3] = preC[3] / a;
+  // c[3] = ((crossProduct(v0, edge1) >> kTrisoupFpBits) * edge2) / a;
 
-  // ray tracing
-  int haloTriangle = 0;
-  int haloBit = (((1 << bitDropped) - 1) << kTrisoupFpBits) / blockWidth; // 28
-  haloBit = (haloBit * 24) / 32;
-  haloBit = haloBit > 40 ? 40 : haloBit;
+  int64_t a1 = c[g1pos[direction]];
+  int64_t a2 = c[g2pos[direction]];
+  int64_t a3 =
+    ((c[direction] * rayOrigin[direction]) >> kTrisoupFpBits) - c[3];
 
-  if (haloFlag) {
-    if (samplingValue > 1) {
-      haloTriangle = haloFlag ? (adaptiveHaloFlag ? 50 * samplingValue : 50) : 0;
-      haloTriangle = haloTriangle > 100 ? 100 : haloTriangle;
-    }
-    else {
-      haloTriangle = haloBit;
-    }
+  int32_t sv = samplingValue;
+
+  int64_t deltaT1 = a1 * sv;
+  int64_t deltaT2 = a2 * sv;
+
+  std::array<int64_t, 2> V0 = {v0[g1pos[direction]], v0[g2pos[direction]]};
+  std::array<int64_t, 2> V1 = {v1[g1pos[direction]], v1[g2pos[direction]]};
+  std::array<int64_t, 2> V2 = {v2[g1pos[direction]], v2[g2pos[direction]]};
+
+  int64_t S =
+    (V0[0] - V1[0]) * (V2[1] - V1[1]) - (V0[1] - V1[1]) * (V2[0] - V1[0]);
+
+  if (S < 0) {
+    V0.swap(V2);
   }
+  //directly convert halo parameters from 2D to 3D
+  int32_t haloTriangle2D =
+    -(((std::abs(S) + kTrisoupFpHalf) >> kTrisoupFpBits) * haloTriangle);
 
-  int thickness = samplingValue > 1 ? 16 : 32;
+  bool isVisible[129][129];
+  int32_t tBuffer[129][129];
+  for (int32_t g1 = startposG1; g1 <= endposG1; g1 += sv)
+    for (int32_t g2 = startposG2; g2 <= endposG2; g2 += sv)
+      isVisible[g1][g2] = false;
 
-  for (int32_t g1 = startposG1; g1 <= endposG1; g1 += samplingValue) {
+  for (int32_t g1 = startposG1; g1 <= endposG1; g1 += sv) {
     rayOrigin[g1pos[direction]] = g1 << kTrisoupFpBits;
-
-
-    for (int32_t g2 = startposG2; g2 <= endposG2; g2 += samplingValue) {
+    bool preGrid = false;
+    for (int32_t g2 = startposG2; g2 <= endposG2; g2 += sv) {
       rayOrigin[g2pos[direction]] = g2 << kTrisoupFpBits;
+      std::array<int64_t, 2> P = {g1 << kTrisoupFpBits, g2 << kTrisoupFpBits};
 
-      // middle ray at integer position 
-      Vec3<int32_t>  intersection = rayOrigin;
+      isVisible[g1][g2] =
+        IsPointInTriangle(P, V0, V1, V2, haloTriangle2D) ? true : false;
+
+      if (preGrid && !isVisible[g1][g2])
+        break;
+      preGrid = isVisible[g1][g2];
+
+      if (!isVisible[g1][g2])
+        continue;
+
+      if ((g2 - sv) >= startposG2 && isVisible[g1][g2 - sv]) {
+        tBuffer[g1][g2] = tBuffer[g1][g2 - sv] + deltaT2;
+      } else if ((g1 - sv) >= startposG1 && isVisible[g1 - sv][g2]) {
+        tBuffer[g1][g2] = tBuffer[g1 - sv][g2] + deltaT1;
+      } else {
+        tBuffer[g1][g2] = ((P[0] * a1) >> kTrisoupFpBits)
+          + ((P[1] * a2) >> kTrisoupFpBits) + a3;
+      }
+
+      // middle ray at integer position
+      Vec3<int32_t> intersection = rayOrigin;
       Vec3<int32_t> intersectionUp = rayOrigin;
       Vec3<int32_t> intersectionDown = rayOrigin;
-      bool foundIntersection = rayIntersectsTriangle(rayOrigin, v0, edge1, edge2, h, a, intersection, intersectionUp, intersectionDown, direction, haloTriangle, thickness);
-      if (foundIntersection) {
-        Vec3<int32_t>foundvoxel;
+      Vec3<int32_t> foundvoxel;
 
-        if (true || samplingValue == 1) {
-          foundvoxel = (intersectionUp + truncateValue) >> kTrisoupFpBits;
-          if (boundaryinsidecheck(foundvoxel, blockWidth-1)) {
-            refinedVerticesBlock.push_back(nodepos + foundvoxel);
-          }
-          foundvoxel = (intersectionDown + truncateValue) >> kTrisoupFpBits;
-          if (boundaryinsidecheck(foundvoxel, blockWidth-1)) {
-            refinedVerticesBlock.push_back(nodepos + foundvoxel);
-          }
-        }
+      intersection[direction] += tBuffer[g1][g2];
 
-        foundvoxel = (intersection + truncateValue) >> kTrisoupFpBits;
-        if (boundaryinsidecheck(foundvoxel, blockWidth-1)) {
+      intersectionUp = intersection;
+      intersectionUp[direction] += thickness;
+
+      intersectionDown = intersection;
+      intersectionDown[direction] -= thickness;
+
+      if (true || samplingValue == 1) {
+        foundvoxel = (intersectionUp + truncateValue) >> kTrisoupFpBits;
+        if (boundaryinsidecheck(foundvoxel, blockWidth - 1)) {
           refinedVerticesBlock.push_back(nodepos + foundvoxel);
-          continue; // ray interected , no need to launch other rays
         }
+        foundvoxel = (intersectionDown + truncateValue) >> kTrisoupFpBits;
+        if (boundaryinsidecheck(foundvoxel, blockWidth - 1)) {
+          refinedVerticesBlock.push_back(nodepos + foundvoxel);
+        }
+      }
 
+      foundvoxel = (intersection + truncateValue) >> kTrisoupFpBits;
+      if (boundaryinsidecheck(foundvoxel, blockWidth - 1)) {
+        refinedVerticesBlock.push_back(nodepos + foundvoxel);
+        continue;  // ray interected , no need to launch other rays
       }
 
       // if ray not interected then  augment +- offset
       if (samplingValue == 1 && fineRayflag) {
-        const int Offset1[8] = { 0,  0, -1, +1, -1, -1, +1, +1 };
-        const int Offset2[8] = { -1, +1,  0,  0, -1, +1, -1, +1 };
+        const int Offset1[8] = {0, 0, -1, +1, -1, -1, +1, +1};
+        const int Offset2[8] = {-1, +1, 0, 0, -1, +1, -1, +1};
         const int offset = kTrisoupFpHalf >> 2;
 
         for (int pos = 0; pos < 8; pos++) {
-
           Vec3<int32_t> rayOrigin2 = rayOrigin;
           rayOrigin2[g1pos[direction]] += Offset1[pos] * offset;
           rayOrigin2[g2pos[direction]] += Offset2[pos] * offset;
+          std::array<int64_t, 2> P = {
+            rayOrigin2[g1pos[direction]], rayOrigin2[g2pos[direction]]};
+
+          bool isVisible =
+            IsPointInTriangle(P, V0, V1, V2, haloTriangle2D) ? true : false;
+
+          if (!isVisible)
+            continue;
+          int32_t t = ((P[0] * a1) >> kTrisoupFpBits)
+            + ((P[1] * a2) >> kTrisoupFpBits) + a3;
 
           Vec3<int32_t> intersection = rayOrigin2;
-          if (rayIntersectsTriangle(rayOrigin2, v0, edge1, edge2, h, a, intersection, intersectionUp, intersectionDown, direction, haloTriangle, thickness)) {
-            Vec3<int32_t> foundvoxel = (intersection + truncateValue) >> kTrisoupFpBits;
-            if (boundaryinsidecheck(foundvoxel, blockWidth-1)) {
-              refinedVerticesBlock.push_back(nodepos + foundvoxel);
-              break; // ray interected , no need to launch other rays
-            }
+          intersection[direction] += t;
+          foundvoxel = (intersection + truncateValue) >> kTrisoupFpBits;
+          if (boundaryinsidecheck(foundvoxel, blockWidth - 1)) {
+            refinedVerticesBlock.push_back(nodepos + foundvoxel);
+            continue;  // ray interected , no need to launch other rays
           }
+        }  //pos
 
-        } //pos
+      }  // augment
 
-      } // augment
-
-
-    }// loop g2 
-  }//loop g1
-
+    }  // loop g2
+  }    //loop g1
 }
 
 // ---------------------------------------------------------------------------

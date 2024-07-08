@@ -421,7 +421,6 @@ void rayTracingAlongdirection(
   std::vector<Vec3<int32_t>>& refinedVerticesBlock,
   int direction,
   uint32_t samplingValue,
-  int bitDropped,
   int blockWidth,
   Vec3<int32_t> nodepos,
   int minRange[3],
@@ -429,9 +428,12 @@ void rayTracingAlongdirection(
   Vec3<int64_t> edge1,
   Vec3<int64_t> edge2,
   Vec3<int64_t> v0,
-  bool haloFlag,
-  bool adaptiveHaloFlag,
-  bool fineRayflag);
+  Vec3<int64_t> v1,
+  Vec3<int64_t> v2,
+  int haloTriangle,
+  int thickness,
+  bool fineRayflag,
+  int64_t preC[4]);
 
 Vec3<int64_t> normalOfCommonPlane(
   Vec3<int32_t> v1, 
