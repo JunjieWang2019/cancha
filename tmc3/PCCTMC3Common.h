@@ -343,6 +343,13 @@ struct AttributeInterPredParams {
   double lambda;
   int rateEstimate;
   double distEstimate;
+  pcc::point_t minPos = 0;
+  pcc::point_t coordScale = 256;
+  void setMinPosAndScale(const pcc::point_t& pos, const pcc::point_t& scale)
+  {
+    minPos = pos;
+    coordScale = scale;
+  }
   double getCost() const { return distEstimate + lambda * rateEstimate; }
   void setLambda(const int qpMinus4)
   {
@@ -364,11 +371,76 @@ struct AttributeInterPredParams {
       ? refIndexCloud->getColor(refPointCloudIndices[idx])
       : referencePointCloud.getColor(idx);
   }
+  pcc::point_t getPoint(int idx) const
+  {
+    if (useRefCloudIndex) {
+      auto p = (*refIndexCloud)[refPointCloudIndices[idx]];
+      p[0] = ((p[0] - minPos[0]) * coordScale[0]) + (1 << 7) >> 8;
+      p[1] = ((p[1] - minPos[1]) * coordScale[1]) + (1 << 7) >> 8;
+      p[2] = ((p[2] - minPos[2]) * coordScale[2]) + (1 << 7) >> 8;
+      return p;
+    } else
+      return referencePointCloud[idx];
+  }
   void clear() { referencePointCloud.clear(); }
   AttributeInterPredParamsForRAHT paramsForInterRAHT;
   bool codeAttributeSecondPass()
   {
     return attrInterIntraSliceRDO && enableAttrInterPred;
+  }
+  void updateReferencePointCloud(
+    const Box3<int>& currentFrameBox,
+    CloudFrame* _refFrameAlt,
+    const bool copyCloud,
+    const pcc::point_t& minPos,
+    const pcc::point_t& scale)
+  {
+    if (useRefCloudIndex) {
+      refIndexCloud = &(_refFrameAlt->cloud);
+      auto& indices = refPointCloudIndices;
+      const int numPts = refIndexCloud->getPointCount();
+      indices.resize(numPts);
+      int ctr = 0;
+      for (auto i = 0; i < numPts; i++) {
+        auto p = (*refIndexCloud)[i];
+        p[0] = ((p[0] - minPos[0]) * scale[0]) + (1 << 7) >> 8;
+        p[1] = ((p[1] - minPos[1]) * scale[1]) + (1 << 7) >> 8;
+        p[2] = ((p[2] - minPos[2]) * scale[2]) + (1 << 7) >> 8;
+
+        if (currentFrameBox.contains(p))
+          indices[ctr++] = i;
+      }
+      indices.resize(ctr);
+    } else {
+      if (copyCloud)
+        referencePointCloud = _refFrameAlt->cloud;
+      int count = 0;
+      auto& cloudTmp = referencePointCloud;
+      for (int i = 0; i < getPointCount(); i++) {
+        point_t p = cloudTmp[i];
+        if (currentFrameBox.contains(p)) {
+          cloudTmp[count] = p;
+          if (cloudTmp.hasReflectances())
+            cloudTmp.setReflectance(count, cloudTmp.getReflectance(i));
+          if (cloudTmp.hasColors())
+            cloudTmp.setColor(count, cloudTmp.getColor(i));
+          count++;
+        }
+      }
+      cloudTmp.resize(count);
+    }
+  }
+  void copyReferenceCloud(CloudFrame* refFrame)
+  {
+    if (useRefCloudIndex) {
+      refIndexCloud = &(refFrame->cloud);
+      auto& indices = refPointCloudIndices;
+      indices.resize(refIndexCloud->getPointCount());
+      int ctr = 0;
+      for (auto it = indices.begin(); it != indices.end(); it++)
+        *it = ctr++;
+    } else
+      referencePointCloud = refFrame->cloud;
   }
 };
 
@@ -769,18 +841,14 @@ struct PCCPredictor {
       const uint32_t neighIdx[3] = {
         neighbors[0].pointIndex, neighbors[1].pointIndex,
         neighbors[2].pointIndex};
-      const PCCPointSet3& refCloud = attrInterPredParams.referencePointCloud;
-      const auto refIdxCloud = attrInterPredParams.refIndexCloud;
-      const auto& indices = attrInterPredParams.refPointCloudIndices;
-      const bool s = attrInterPredParams.useRefCloudIndex;
       neigh0Pos = neighbors[0].interFrameRef
-        ? (s ? (*refIdxCloud)[indices[neighIdx[0]]] : refCloud[neighIdx[0]])
+        ? attrInterPredParams.getPoint(neighIdx[0])
         : cloud[neighIdx[0]];
       neigh1Pos = neighbors[1].interFrameRef
-        ? (s ? (*refIdxCloud)[indices[neighIdx[1]]] : refCloud[neighIdx[1]])
+        ? attrInterPredParams.getPoint(neighIdx[1])
         : cloud[neighIdx[1]];
       neigh2Pos = neighbors[2].interFrameRef
-        ? (s ? (*refIdxCloud)[indices[neighIdx[2]]] : refCloud[neighIdx[2]])
+        ? attrInterPredParams.getPoint(neighIdx[2])
         : cloud[neighIdx[2]];
     } else {
       neigh0Pos = cloud[indexes[neighbors[0].predictorIndex]];
@@ -788,10 +856,6 @@ struct PCCPredictor {
       neigh2Pos = cloud[indexes[neighbors[2].predictorIndex]];
     }
     
-    //auto neigh0Pos = cloud[indexes[neighbors[0].predictorIndex]];
-    //auto neigh1Pos = cloud[indexes[neighbors[1].predictorIndex]];
-    //auto neigh2Pos = cloud[indexes[neighbors[2].predictorIndex]];
-
     constexpr bool variant = 1;
     const auto d = variant ? 10 : 8;
     const auto bb = variant ? 1 : 4;
@@ -854,14 +918,15 @@ struct PCCPredictor {
 		  const uint32_t neighIdx[3] = {
 			neighbors[0].pointIndex, neighbors[1].pointIndex,
 			neighbors[2].pointIndex };
-		  const PCCPointSet3* refCloud[3];
-		  for (auto i = 0; i < 3; i++)
-			  refCloud[i] = neighbors[i].interFrameRef
-			  ? &attrInterPredParams.referencePointCloud
-			  : &cloud;
-		  neigh0Pos = (*refCloud[0])[neighIdx[0]];
-		  neigh1Pos = (*refCloud[1])[neighIdx[1]];
-		  neigh2Pos = (*refCloud[2])[neighIdx[2]];
+          neigh0Pos = neighbors[0].interFrameRef
+            ? attrInterPredParams.getPoint(neighIdx[0])
+            : cloud[neighIdx[0]];
+          neigh1Pos = neighbors[1].interFrameRef
+            ? attrInterPredParams.getPoint(neighIdx[1])
+            : cloud[neighIdx[1]];
+          neigh2Pos = neighbors[2].interFrameRef
+            ? attrInterPredParams.getPoint(neighIdx[2])
+            : cloud[neighIdx[2]];
 	  }
 	  else {
 		  neigh0Pos = cloud[indexes[neighbors[0].predictorIndex]];
@@ -2991,6 +3056,22 @@ computeMortonCodesUnsorted(
   }
 }
 
+inline void
+computeMortonCodesUnsorted(
+  const AttributeInterPredParams& attrInterPredParams,
+  const Vec3<int32_t> lodNeighBias,
+  std::vector<MortonCodeWithIndex>& packedVoxel)
+{
+  const int32_t pointCount = attrInterPredParams.getPointCount();
+  packedVoxel.resize(pointCount);
+
+  for (int n = 0; n < pointCount; n++) {
+    auto& pv = packedVoxel[n];
+    pv.position = attrInterPredParams.getPoint(n);
+    pv.mortonCode = mortonAddr(pv.position);
+    pv.index = n;
+  }
+}
 //---------------------------------------------------------------------------
 
 inline void
@@ -3081,24 +3162,13 @@ buildPredictorsFast(
   numberOfPointsPerLevelOfDetail.reserve(21);
   numberOfPointsPerLevelOfDetail.push_back(pointCount);
 
-  const auto& referencePointCloud = attrInterPredParams.useRefCloudIndex
-    ? *(attrInterPredParams.refIndexCloud)
-    : attrInterPredParams.referencePointCloud;
-  const int32_t pointCountRef = attrInterPredParams.useRefCloudIndex
-    ? attrInterPredParams.getPointCount()
-    : int32_t(referencePointCloud.getPointCount());
+  const int32_t pointCountRef = attrInterPredParams.getPointCount();
   std::vector<MortonCodeWithIndex> packedVoxelRef = {};
   int32_t startIndexRef = 0, endIndexRef = 0;
   if (interRef) {
     assert(pointCountRef);
-    if (attrInterPredParams.useRefCloudIndex) {
-      computeMortonCodesUnsorted(
-        referencePointCloud, attrInterPredParams.refPointCloudIndices,
-        aps.lodNeighBias, packedVoxelRef);
-    } else {
-      computeMortonCodesUnsorted(
-        referencePointCloud, aps.lodNeighBias, packedVoxelRef);
-    }
+    computeMortonCodesUnsorted(
+      attrInterPredParams, aps.lodNeighBias, packedVoxelRef);
     if (
       !aps.canonical_point_order_flag && !aps.max_points_per_sort_log2_plus1) {
       std::sort(packedVoxelRef.begin(), packedVoxelRef.end());
@@ -3333,6 +3403,7 @@ buildLodFast(
     numberOfPointsPerLevelOfDetail.begin(),
     numberOfPointsPerLevelOfDetail.end());
 }
+
 //---------------------------------------------------------------------------
 inline void
 computeMortonCodesUnsorted(

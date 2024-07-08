@@ -789,13 +789,8 @@ AttributeDecoder::decodeReflectancesRaht(
     if(firstAttributeInSlice){
       attrInterPredParams.paramsForInterRAHT.packedVoxel.resize(voxelCount_ref);
       for (int n = 0; n < voxelCount_ref; n++) {
-        if (attrInterPredParams.useRefCloudIndex) {
-          const int idx = attrInterPredParams.refPointCloudIndices[n];
-          attrInterPredParams.paramsForInterRAHT.packedVoxel[n].mortonCode =
-            mortonAddr((*attrInterPredParams.refIndexCloud)[idx]);
-        } else
-          attrInterPredParams.paramsForInterRAHT.packedVoxel[n].mortonCode =
-            mortonAddr(attrInterPredParams.referencePointCloud[n]);
+        attrInterPredParams.paramsForInterRAHT.packedVoxel[n].mortonCode =
+          mortonAddr(attrInterPredParams.getPoint(n));
         attrInterPredParams.paramsForInterRAHT.packedVoxel[n].index = n;
       }
       sort(attrInterPredParams.paramsForInterRAHT.packedVoxel.begin(), attrInterPredParams.paramsForInterRAHT.packedVoxel.end());
@@ -895,13 +890,8 @@ AttributeDecoder::decodeColorsRaht(
     if(firstAttributeInSlice){
       attrInterPredParams.paramsForInterRAHT.packedVoxel.resize(voxelCount_ref);
       for (int n = 0; n < voxelCount_ref; n++) {
-        if (attrInterPredParams.useRefCloudIndex) {
-          const int idx = attrInterPredParams.refPointCloudIndices[n];
-          attrInterPredParams.paramsForInterRAHT.packedVoxel[n].mortonCode =
-            mortonAddr((*attrInterPredParams.refIndexCloud)[idx]);
-        } else
-          attrInterPredParams.paramsForInterRAHT.packedVoxel[n].mortonCode =
-            mortonAddr(attrInterPredParams.referencePointCloud[n]);
+        attrInterPredParams.paramsForInterRAHT.packedVoxel[n].mortonCode =
+          mortonAddr(attrInterPredParams.getPoint(n));
         attrInterPredParams.paramsForInterRAHT.packedVoxel[n].index = n;
       }
 

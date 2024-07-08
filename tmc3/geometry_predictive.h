@@ -550,14 +550,12 @@ public:
       int ctr = 0;
       for (auto laserId = 0; laserId < numLasers; laserId++) {      
       const auto& refPointCurLaser = refPointValsCur[laserId];
-        const auto scaledLaserId =
-          (((laserId - minPos[2]) * coordScale[2]) + (1 << 7)) >> 8;
         for (const auto& entry : refPointCurLaser)
           for (const auto& pt : entry.second) {
             auto& ptOut = refFrameAlt.cloud[ctr];
-            ptOut[0] = (((pt[0] - minPos[0]) * coordScale[0]) + (1 << 7)) >> 8;
-            ptOut[1] = (((pt[1] - minPos[1]) * coordScale[1]) + (1 << 7)) >> 8;
-            ptOut[2] = scaledLaserId;
+            ptOut[0] = pt[0];
+            ptOut[1] = pt[1];
+            ptOut[2] = laserId;
             refFrameAlt.cloud.setReflectance(ctr, pt[2]);
             ctr++;
           }

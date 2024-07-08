@@ -1380,15 +1380,7 @@ PCCTMC3Encoder3::compressPartition(
             if (
               attrInterPredParams.enableAttrInterPred
               && attr_aps.attr_encoding == AttributeEncoding::kRAHTransform) {
-              if (attrInterPredParams.useRefCloudIndex) {
-                attrInterPredParams.refIndexCloud = &(_refFrameAlt.cloud);
-                auto& indices = attrInterPredParams.refPointCloudIndices;
-                indices.resize(attrInterPredParams.refIndexCloud->getPointCount());
-                int ctr = 0;
-                for (auto it = indices.begin(); it != indices.end(); it++)
-                  *it = ctr++;
-              } else
-                attrInterPredParams.referencePointCloud = _refFrameAlt.cloud;
+              attrInterPredParams.copyReferenceCloud(&_refFrameAlt);
             }
             if (
               attrInterPredParams.enableAttrInterPred
@@ -1396,24 +1388,20 @@ PCCTMC3Encoder3::compressPartition(
               for (auto i = 0; i < 3; i++)
                 minPos[i] = minPos[i] < minPos_ref[i] ? minPos[i] : minPos_ref[i];
               auto minPos_shift = minPos_ref - minPos;
+              attrInterPredParams.setMinPosAndScale(
+                minPos, attr_aps.attr_coord_scale);
 
               if (
                 (minPos_shift[0] || minPos_shift[1] || minPos_shift[2])
-                && attr_aps.attr_encoding == AttributeEncoding::kRAHTransform) {
-                if (attrInterPredParams.useRefCloudIndex)
-                  offsetAndScaleShift(
-                    minPos_shift, attr_aps.attr_coord_scale,
-                    attrInterPredParams.refIndexCloud,
-                    &attrInterPredParams.refPointCloudIndices[0],
-                    &attrInterPredParams.refPointCloudIndices[0]
-                      + attrInterPredParams.getPointCount());
-                else
-                  offsetAndScaleShift(
-                    minPos_shift, attr_aps.attr_coord_scale,
-                    &attrInterPredParams.referencePointCloud[0],
-                    &attrInterPredParams.referencePointCloud[0]
-                      + attrInterPredParams.getPointCount());
-              }
+                && attr_aps.attr_encoding == AttributeEncoding::kRAHTransform
+                && !attrInterPredParams.useRefCloudIndex){
+
+                offsetAndScaleShift(
+                  minPos_shift, attr_aps.attr_coord_scale,
+                  &attrInterPredParams.referencePointCloud[0],
+                  &attrInterPredParams.referencePointCloud[0]
+                    + attrInterPredParams.getPointCount()); 
+              }             
             }
             minPos_ref = minPos;
           } else {
@@ -1455,38 +1443,10 @@ PCCTMC3Encoder3::compressPartition(
           pointCloud[i] += _sliceOrigin; 
 
       if (attr_aps.attrInterPredictionEnabled && firstAttributeInSlice) {
-        Box3<int> currentFrameBox = pointCloud.computeBoundingBox();
-        if (attrInterPredParams.useRefCloudIndex) {
-          attrInterPredParams.refIndexCloud = &(_refFrameAlt.cloud);
-          auto& indices = attrInterPredParams.refPointCloudIndices;
-          indices.resize(attrInterPredParams.refIndexCloud->getPointCount());
-          const int numPts =
-        attrInterPredParams.refIndexCloud->getPointCount();
-          int ctr = 0;
-          for (auto i = 0; i < numPts; i++) {
-            auto& p = (*(attrInterPredParams.refIndexCloud))[i];
-            if (currentFrameBox.contains(p))
-              indices[ctr++] = i;
-            }
-            indices.resize(ctr);
-          } else {
-            if (attr_aps.spherical_coord_flag && !_gps->biPredictionEnabledFlag)
-              attrInterPredParams.referencePointCloud = _refFrameAlt.cloud;
-            int count = 0;
-            auto& cloudTmp = attrInterPredParams.referencePointCloud;
-            for (int i = 0; i < attrInterPredParams.getPointCount(); i++) {
-              point_t p = cloudTmp[i];
-              if (currentFrameBox.contains(p)) {
-                cloudTmp[count] = p;
-                if (cloudTmp.hasReflectances())
-                  cloudTmp.setReflectance(count, cloudTmp.getReflectance(i));
-                if (cloudTmp.hasColors())
-                  cloudTmp.setColor(count, cloudTmp.getColor(i));
-                count++;
-              }
-          }
-          cloudTmp.resize(count);
-        }  
+        attrInterPredParams.updateReferencePointCloud(
+          pointCloud.computeBoundingBox(), &_refFrameAlt,
+          attr_aps.spherical_coord_flag && !_gps->biPredictionEnabledFlag,
+          minPos_ref, attr_aps.attr_coord_scale);      
       }
 
       if (_gps->predgeom_enabled_flag && !attr_aps.canonical_point_order_flag){
