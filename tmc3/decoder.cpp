@@ -1054,7 +1054,7 @@ PCCTMC3Decoder3::decodeAttributeBrick(const PayloadBuffer& buf)
 
     biPredDecodeParams.attrInterPredParams2.enableAttrInterPred =
       _gps->biPredictionEnabledFlag && attr_aps.attrInterPredictionEnabled
-      && !abh.disableAttrInterPredForRefFrame2;
+      && abh.enableAttrInterPred2;
 
     if (!attr_aps.spherical_coord_flag) {
       if (attrInterPredParams.enableAttrInterPred)

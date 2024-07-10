@@ -2314,7 +2314,7 @@ write(
   if (aps.attrInterPredictionEnabled) {
     bs.write(abh.enableAttrInterPred);
     if (abh.geomEnableBiInterPred) {
-      bs.write(abh.disableAttrInterPredForRefFrame2);
+      bs.write(abh.enableAttrInterPred2);
     }
       
     if (abh.enableAttrInterPred && aps.raht_send_inter_filters
@@ -2473,12 +2473,12 @@ parseAbh(
         }
     }
   }
-  abh.disableAttrInterPredForRefFrame2 = true;
+  abh.enableAttrInterPred2 = false;
   abh.enableAttrInterPred = false;
   if (aps.attrInterPredictionEnabled) {
     bs.read(&abh.enableAttrInterPred);
     if (abh.geomEnableBiInterPred)
-      bs.read(&abh.disableAttrInterPredForRefFrame2);
+      bs.read(&abh.enableAttrInterPred2);
     
     if (aps.raht_send_inter_filters && abh.enableAttrInterPred
       && aps.attr_encoding == AttributeEncoding::kRAHTransform) {

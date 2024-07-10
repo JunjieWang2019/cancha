@@ -1090,10 +1090,10 @@ struct AttributeBrickHeader {
 
   bool enableAttrInterPred;
 
+  bool enableAttrInterPred2;
+
   bool geomEnableBiInterPred = false;
 
-  // Disable the attribute inter prediction for the second reference frame
-  bool disableAttrInterPredForRefFrame2;
   std::vector<int> RAHTFilterTaps;
 
   std::vector<int> raht_attr_layer_code_mode;

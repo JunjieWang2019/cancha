@@ -1303,10 +1303,10 @@ PCCTMC3Encoder3::compressPartition(
  
 
     abh.attrInterPredSearchRange = attr_aps.attrInterPredSearchRange;
-    abh.disableAttrInterPredForRefFrame2 = !biPredEncodeParams.movingState2;
+    abh.enableAttrInterPred2 = biPredEncodeParams.movingState2;
     biPredEncodeParams.attrInterPredParams2.enableAttrInterPred =
       _gps->biPredictionEnabledFlag && attr_aps.attrInterPredictionEnabled
-      && !abh.disableAttrInterPredForRefFrame2;
+      && abh.enableAttrInterPred2;
 
     if (!attr_aps.spherical_coord_flag) {
       if (attrInterPredParams.enableAttrInterPred)
