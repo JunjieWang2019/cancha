@@ -1247,6 +1247,9 @@ PCCTMC3Encoder3::compressPartition(
       auto attrEncoder = makeAttributeEncoder();
     // for each attribute
 
+    PCCPointSet3 pointCloudTmp;// to store recon pointCloud 
+    bool storeAsSphe;
+
     bool firstAttributeInSlice = true;
 
     for (const auto& it : params->attributeIdxMap) {
@@ -1464,23 +1467,23 @@ PCCTMC3Encoder3::compressPartition(
             auto& p = (*(attrInterPredParams.refIndexCloud))[i];
             if (currentFrameBox.contains(p))
               indices[ctr++] = i;
-          }
-          indices.resize(ctr);
-        } else {
-          if (attr_aps.spherical_coord_flag && !_gps->biPredictionEnabledFlag)
-            attrInterPredParams.referencePointCloud = _refFrameAlt.cloud;
-          int count = 0;
-          auto& cloudTmp = attrInterPredParams.referencePointCloud;
-          for (int i = 0; i < attrInterPredParams.getPointCount(); i++) {
-            point_t p = cloudTmp[i];
-            if (currentFrameBox.contains(p)) {
-              cloudTmp[count] = p;
-              if (cloudTmp.hasReflectances())
-                cloudTmp.setReflectance(count, cloudTmp.getReflectance(i));
-              if (cloudTmp.hasColors())
-                cloudTmp.setColor(count, cloudTmp.getColor(i));
-              count++;
             }
+            indices.resize(ctr);
+          } else {
+            if (attr_aps.spherical_coord_flag && !_gps->biPredictionEnabledFlag)
+              attrInterPredParams.referencePointCloud = _refFrameAlt.cloud;
+            int count = 0;
+            auto& cloudTmp = attrInterPredParams.referencePointCloud;
+            for (int i = 0; i < attrInterPredParams.getPointCount(); i++) {
+              point_t p = cloudTmp[i];
+              if (currentFrameBox.contains(p)) {
+                cloudTmp[count] = p;
+                if (cloudTmp.hasReflectances())
+                  cloudTmp.setReflectance(count, cloudTmp.getReflectance(i));
+                if (cloudTmp.hasColors())
+                  cloudTmp.setColor(count, cloudTmp.getColor(i));
+                count++;
+              }
           }
           cloudTmp.resize(count);
         }  
@@ -1499,10 +1502,9 @@ PCCTMC3Encoder3::compressPartition(
       attrEncoder->encode(
         *_sps, attr_sps, attr_aps, abh, ctxtMemAttr, pointCloud, &payload, attrInterPredParams,slicingParam, predCoder);
 
-      if (reconCloudAlt && attr_aps.spherical_coord_flag && _gps->predgeom_enabled_flag)
-        reconCloudAlt->cloud.append(pointCloud, _posSph);
-      else
-        reconCloudAlt->cloud.append(pointCloud);
+      pointCloudTmp = pointCloud;
+
+      storeAsSphe = reconCloudAlt && attr_aps.spherical_coord_flag && _gps->predgeom_enabled_flag;
 
       bool currFrameNotCodedAsB =
         (_gps->biPredictionEnabledFlag
@@ -1540,6 +1542,10 @@ PCCTMC3Encoder3::compressPartition(
       firstAttributeInSlice = false;
     }
 
+    if (storeAsSphe)
+      reconCloudAlt->cloud.append(pointCloudTmp, _posSph);
+    else
+      reconCloudAlt->cloud.append(pointCloudTmp);
   }  
   else{
   

@@ -157,6 +157,12 @@ private:
   // The point cloud currently being decoded
   PCCPointSet3 _currentPointCloud;
 
+  // The point cloud with the reconstructed attribute
+  PCCPointSet3 _currentPointCloudAttr;
+
+  // Whether use the spherical point coordinate as the reconstructed attribute coordinate
+  bool _storeAsSphe;
+
   // The point cloud currently being decoded to store the spherical coordinates
   PCCPointSet3 _reconSliceAltPositions;
 

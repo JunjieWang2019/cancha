@@ -313,6 +313,10 @@ PCCTMC3Decoder3::decompress(
         for (int k = 0; k < 3; k++)
           _currentPointCloud[i][k] += _sliceOrigin[k];
       _accumCloud.append(_currentPointCloud);
+      if (_storeAsSphe)
+        _accumCloudAltPositions.append(_currentPointCloudAttr, _posSph);
+      else
+        _accumCloudAltPositions.append(_currentPointCloudAttr);
     }
   }
 
@@ -1301,10 +1305,8 @@ PCCTMC3Decoder3::decodeAttributeBrick(const PayloadBuffer& buf)
       _params.minGeomNodeSizeLog2, buf.data() + abhSize, buf.size() - abhSize,
       ctxtMemAttr, _currentPointCloud, attrInterPredParams, slicingParam, predDecoder);
 
-    if (attr_aps.spherical_coord_flag && _gps->predgeom_enabled_flag)
-      _accumCloudAltPositions.append(_currentPointCloud, _posSph);
-    else
-      _accumCloudAltPositions.append(_currentPointCloud);
+    _currentPointCloudAttr = _currentPointCloud;
+    _storeAsSphe = attr_aps.spherical_coord_flag && _gps->predgeom_enabled_flag;
 
     bool currFrameNotCodedAsB =
       (_gps->biPredictionEnabledFlag && !_gbh.biPredictionEnabledFlag);
