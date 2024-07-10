@@ -1142,8 +1142,10 @@ write(const SequenceParameterSet& sps, const AttributeParameterSet& aps)
     if (aps.attrInterPredictionEnabled){
       if (aps.attr_encoding == AttributeEncoding::kRAHTransform) {
         bs.writeUe(aps.raht_inter_prediction_depth_minus1);
-        bs.write(aps.raht_send_inter_filters);
-        bs.writeUe(aps.raht_inter_skip_layers);
+        if(!aps.rahtPredParams.integer_haar_enable_flag){
+          bs.write(aps.raht_send_inter_filters);
+          bs.writeUe(aps.raht_inter_skip_layers);          
+        }
         bs.write(aps.raht_enable_code_layer);
       } else
         bs.writeUe(aps.attrInterPredSearchRange);       
@@ -1326,8 +1328,10 @@ parseAps(const PayloadBuffer& buf, const SequenceParameterSet& sps)
     if (aps.attrInterPredictionEnabled) {
       if (aps.attr_encoding == AttributeEncoding::kRAHTransform) {
         bs.readUe(&aps.raht_inter_prediction_depth_minus1);
-        bs.read(&aps.raht_send_inter_filters);
-        bs.readUe(&aps.raht_inter_skip_layers);
+        if(!aps.rahtPredParams.integer_haar_enable_flag){
+          bs.read(&aps.raht_send_inter_filters);
+          bs.readUe(&aps.raht_inter_skip_layers);          
+        }
         bs.read(&aps.raht_enable_code_layer);
       }
       else
@@ -2293,7 +2297,7 @@ write(
       bs.writeSe(region.attr_region_qp_offset[1]);
   }
  
-  if (aps.attr_encoding == AttributeEncoding::kRAHTransform) {
+  if (aps.attr_encoding == AttributeEncoding::kRAHTransform && !aps.rahtPredParams.integer_haar_enable_flag) {
     bs.write(abh.attr_raht_ac_coeff_qp_offset_preset());
     if (abh.attr_raht_ac_coeff_qp_offset_preset()) {
       const auto attr_num_raht_ac_coeff_qp_layers_minus1 =
@@ -2455,7 +2459,7 @@ parseAbh(
       bs.readSe(&region.attr_region_qp_offset[1]);
   }
 
-  if (aps.attr_encoding == AttributeEncoding::kRAHTransform) {
+  if (aps.attr_encoding == AttributeEncoding::kRAHTransform && !aps.rahtPredParams.integer_haar_enable_flag) {
     bool raht_ac_coeff_qp_offset_present;
     bs.read(&raht_ac_coeff_qp_offset_present);
     if (raht_ac_coeff_qp_offset_present) {
