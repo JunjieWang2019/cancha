@@ -228,6 +228,45 @@ isDirectModeEligible_Inter(
 }
 
 //---------------------------------------------------------------------------
+// Determine if direct coding is permitted.
+// If tool is enabled:
+//   - Block must not be near the bottom of the tree
+//   - The parent / grandparent are sparsely occupied
+
+inline bool
+isDirectModeEligible_fgs(
+	int intensity,
+	int nodeSizeLog2,
+	int neighPatEq0P,
+	int nodeChildCntP,
+	int nodeChildCntGP)
+{
+	bool occupancyIsPredictable = false;
+	bool isAngularModeEnabled = false;
+
+	if (!intensity)
+		return false;
+	if (occupancyIsPredictable && !isAngularModeEnabled)
+		return false;
+
+	if (intensity == 1)
+		return (nodeSizeLog2 >= 2) && (neighPatEq0P)
+		&& (nodeChildCntP == 1) && (nodeChildCntGP <= 2);
+
+	if (intensity == 2)
+		return (nodeSizeLog2 >= 2) && (neighPatEq0P);
+
+	// This is basically unconditionally enabled.
+	// If a node is that is IDCM-eligible is not coded with IDCM and has only
+	// one child, then it is likely that the child would also not be able to
+	// be coded with IDCM (eg, it still contains > 2 unique points).
+	if (intensity == 3)
+		return (nodeSizeLog2 >= 2) && (nodeChildCntP > 1);
+
+	return false;
+}
+
+//---------------------------------------------------------------------------
 // Select the neighbour pattern reduction table according to GPS config.
 
 inline const uint8_t*

@@ -76,7 +76,10 @@ namespace pcc {
     _bboxMinVector.clear();
     _bboxMaxVector.clear();
 
-    
+
+	_SubgroupOccNeighPatEq0P.clear();
+	_SubgroupOccNodeChildCntP.clear();
+	_SubgroupOccNodeChildCntGP.clear();
     
     _id_output_layer_group = _num_layer_groups-1;
     _roi_enable_flag = false;
@@ -147,6 +150,10 @@ namespace pcc {
       
       _visited.resize(_num_subgroups,false);
     }
+
+	_SubgroupOccNeighPatEq0P.resize(_num_subgroups);
+	_SubgroupOccNodeChildCntP.resize(_num_subgroups);
+	_SubgroupOccNodeChildCntGP.resize(_num_subgroups);
 
     if(isEncoder){
       
@@ -350,6 +357,10 @@ namespace pcc {
     slicingParam.nodesBeforePlanarUpdate = *_nodesBeforePlanarUpdateSaved[curArrayIdx].get();
     slicingParam.buf.planarEligibleKOctreeDepth_perLayer = gbh.planarEligibleKOctreeDepth;
     slicingParam.numPointsInsubgroup = gbh.footer.geom_num_points_minus1 + 1;
+
+	slicingParam.buf.SubgroupOccNeighPatEq0P = _SubgroupOccNeighPatEq0P[curArrayIdx];
+	slicingParam.buf.SubgroupOccNodeChildCntP = _SubgroupOccNodeChildCntP[curArrayIdx];
+	slicingParam.buf.SubgroupOccNodeChildCntGP = _SubgroupOccNodeChildCntGP[curArrayIdx];
   }
   void LayerGroupHandler::setSlicingParamGeom(const int curArrayIdx, const int parentArrayIdx, const DependentGeometryDataUnitHeader& gbh, GeometryGranularitySlicingParam& slicingParam){
     slicingParam.layer_group_enabled_flag = true;
@@ -365,7 +376,10 @@ namespace pcc {
     slicingParam.nodesBeforePlanarUpdate = *_nodesBeforePlanarUpdateSaved[curArrayIdx].get();
     slicingParam.buf.planarEligibleKOctreeDepth_perLayer = gbh.planarEligibleKOctreeDepth;
     slicingParam.numPointsInsubgroup = gbh.footer.geom_num_points_minus1 + 1;
-  
+
+	slicingParam.buf.SubgroupOccNeighPatEq0P = _SubgroupOccNeighPatEq0P[parentArrayIdx];
+	slicingParam.buf.SubgroupOccNodeChildCntP = _SubgroupOccNodeChildCntP[parentArrayIdx];
+	slicingParam.buf.SubgroupOccNodeChildCntGP = _SubgroupOccNodeChildCntGP[parentArrayIdx];  
   }
 
   void LayerGroupHandler::storeSlicingParamGeom(const int curArrayIdx, const GeometryGranularitySlicingParam& slicingParam){
@@ -375,7 +389,10 @@ namespace pcc {
     
 	  _bboxMinVector[curArrayIdx] = slicingParam.bboxMin;
 	  _bboxMaxVector[curArrayIdx] = slicingParam.bboxMax;
-  
+
+	  _SubgroupOccNeighPatEq0P[curArrayIdx] = slicingParam.buf.SubgroupOccNeighPatEq0P;
+	  _SubgroupOccNodeChildCntP[curArrayIdx] = slicingParam.buf.SubgroupOccNodeChildCntP;
+	  _SubgroupOccNodeChildCntGP[curArrayIdx] = slicingParam.buf.SubgroupOccNodeChildCntGP;
   }
 
   void LayerGroupHandler::setSlicingParamAttr(
@@ -1065,6 +1082,9 @@ namespace pcc {
         _numSubsequentSubgroups.resize(_num_subgroups);
 
       }
+	  _SubgroupOccNeighPatEq0P.resize(_num_subgroups);
+	  _SubgroupOccNodeChildCntP.resize(_num_subgroups);
+	  _SubgroupOccNodeChildCntGP.resize(_num_subgroups);
 
       _arrayCounter++;
     }

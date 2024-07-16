@@ -234,8 +234,11 @@ struct GeometryGranularitySlicingBuf {
   OctreePlanarState* curPlanar;
   std::vector<bool> planarEligibleKOctreeDepth_perLayer;
 
+  std::vector<int> SubgroupOccNeighPatEq0P;
+  std::vector<int> SubgroupOccNodeChildCntP;
+  std::vector<int> SubgroupOccNodeChildCntGP;
   
-	std::vector<std::vector<uint32_t>> dcmNodesIdx;
+  std::vector<std::vector<uint32_t>> dcmNodesIdx;
   std::vector<uint32_t> encIndexToOrgIndex;
   
 };

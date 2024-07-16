@@ -169,6 +169,10 @@ class LayerGroupHandler {
     std::vector<int> _startIdxForEachOutputPoints;
     std::vector<Vec3<int>> _bboxMinVector;
     std::vector<Vec3<int>> _bboxMaxVector;
+
+	std::vector<std::vector<int>> _SubgroupOccNeighPatEq0P;
+	std::vector<std::vector<int>> _SubgroupOccNodeChildCntP;
+	std::vector<std::vector<int>> _SubgroupOccNodeChildCntGP;
         
     //for geometry
     std::vector<std::map<int, int>> _idx_uncoded_referenced_geom;

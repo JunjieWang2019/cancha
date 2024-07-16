@@ -1571,11 +1571,10 @@ decodeGeometryOctree(
 	pcc::ringbuf<PCCOctree3Node>* nodesRemaining,
 	const CloudFrame* refFrame,
 	PCCPointSet3& predPointCloud2,
-  PCCPointSet3& compensatedPointCloud,
-  PCCPointSet3& compensatedPointCloud2,
+	PCCPointSet3& compensatedPointCloud,
+	PCCPointSet3& compensatedPointCloud2,
 	const Vec3<int> minimum_position,
-	GeometryGranularitySlicingParam& slicingParam
-)
+	GeometryGranularitySlicingParam& slicingParam)
 {
   const bool isInter = gbh.interPredictionEnabledFlag;
 
@@ -1692,7 +1691,8 @@ decodeGeometryOctree(
 	  fifo = pcc::ringbuf<PCCOctree3Node>(ringBufferSize + 1);
 	  auto nodeSizeLog2 = lvlNodeSizeLog2[slicingParam.startDepth];
 	  int count = 0;
-	  for (auto nodeIt = slicingParam.buf.refNodes->begin(); nodeIt != slicingParam.buf.refNodes->end(); nodeIt++) {
+	  int nodeIdx = 0;
+	  for (auto nodeIt = slicingParam.buf.refNodes->begin(); nodeIt != slicingParam.buf.refNodes->end(); nodeIt++, nodeIdx++) {
 		  PCCOctree3Node& node0 = *(nodeIt);
 		  Vec3<int32_t> nodePos;
 		  for (int m = 0; m < 3; m++)
@@ -1702,12 +1702,22 @@ decodeGeometryOctree(
 			  && nodePos.y() >= slicingParam.bboxMin.y() && nodePos.y() < slicingParam.bboxMax.y()
 			  && nodePos.z() >= slicingParam.bboxMin.z() && nodePos.z() < slicingParam.bboxMax.z())) {
 
+			  node0.idcmEligible = isDirectModeEligible_fgs(
+				  gps.inferred_direct_coding_mode, 
+				  lvlNodeSizeLog2[slicingParam.startDepth - 1].max(),
+				  slicingParam.buf.SubgroupOccNeighPatEq0P[nodeIdx], 
+				  slicingParam.buf.SubgroupOccNodeChildCntP[nodeIdx], 
+				  slicingParam.buf.SubgroupOccNodeChildCntGP[nodeIdx]);
+
 			  fifo.emplace_back(node0);
 			  count++;
 		  }
 		  else
 			  continue;
 	  }
+	  slicingParam.buf.SubgroupOccNeighPatEq0P.resize(0);
+	  slicingParam.buf.SubgroupOccNodeChildCntP.resize(0);
+	  slicingParam.buf.SubgroupOccNodeChildCntGP.resize(0);
   }
   else {
 	  fifo = pcc::ringbuf<PCCOctree3Node>(ringBufferSize + 1);
@@ -2256,21 +2266,28 @@ decodeGeometryOctree(
           node0.predDir ? predFailureCount2 : predFailureCount;
         child.numSiblingsMispredicted = predFailureCount;
 
-        if (isInter && !gps.geom_angular_mode_enabled_flag)
-          child.idcmEligible = isDirectModeEligible_Inter(
-            gps.inferred_direct_coding_mode, nodeMaxDimLog2, gnp.neighPattern,
-            node0, child, occupancyIsPredictable);
-        else
-          child.idcmEligible = isDirectModeEligible(
-            gps.inferred_direct_coding_mode, nodeMaxDimLog2, gnp.neighPattern,
-            node0, child, occupancyIsPredictable,
-            gps.geom_angular_mode_enabled_flag);
+		if (!slicingParam.layer_group_enabled_flag
+			|| slicingParam.layer_group_enabled_flag && depth < slicingParam.endDepth - 1) {
+			if (isInter && !gps.geom_angular_mode_enabled_flag)
+				child.idcmEligible = isDirectModeEligible_Inter(
+					gps.inferred_direct_coding_mode, nodeMaxDimLog2, gnp.neighPattern,
+					node0, child, occupancyIsPredictable);
+			else
+				child.idcmEligible = isDirectModeEligible(
+					gps.inferred_direct_coding_mode, nodeMaxDimLog2, gnp.neighPattern,
+					node0, child, occupancyIsPredictable,
+					gps.geom_angular_mode_enabled_flag);
 
-        if (child.idcmEligible) {
-          child.idcmEligible &= idcmEnableMask & 1;
-          idcmEnableMask = rotateRight(idcmEnableMask, 1);
-        }
-
+			if (child.idcmEligible) {
+				child.idcmEligible &= idcmEnableMask & 1;
+				idcmEnableMask = rotateRight(idcmEnableMask, 1);
+			}
+		}
+		else {
+			slicingParam.buf.SubgroupOccNeighPatEq0P.push_back(gnp.neighPattern == 0);
+			slicingParam.buf.SubgroupOccNodeChildCntP.push_back(child.numSiblingsPlus1);
+			slicingParam.buf.SubgroupOccNodeChildCntGP.push_back(node0.numSiblingsPlus1);
+		}
         numNodesNextLvl++;
       }
     }
