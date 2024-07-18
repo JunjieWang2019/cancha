@@ -1438,7 +1438,7 @@ PCCTMC3Encoder3::compressPartition(
     // replace the attribute encoder if not compatible
     if (!attrEncoder->isReusable(attr_aps, abh))
       attrEncoder = makeAttributeEncoder();
-    if (!attr_aps.spherical_coord_flag)
+    if (!attr_aps.spherical_coord_flag && attr_aps.attrInterPredictionEnabled)
       for (auto i = 0; i < pointCloud.getPointCount(); i++)
         pointCloud[i] += _sliceOrigin; 
 
@@ -1502,7 +1502,7 @@ PCCTMC3Encoder3::compressPartition(
       refCloud = pointCloud;
     }
 
-    if (!attr_aps.spherical_coord_flag)
+    if (!attr_aps.spherical_coord_flag && attr_aps.attrInterPredictionEnabled)
       for (auto i = 0; i < pointCloud.getPointCount(); i++)
         pointCloud[i] -= _sliceOrigin;
 

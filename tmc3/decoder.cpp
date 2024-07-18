@@ -1232,7 +1232,7 @@ PCCTMC3Decoder3::decodeAttributeBrick(const PayloadBuffer& buf)
     _currentPointCloud.swapPoints(altPositions);
   }
 
-  if (!attr_aps.spherical_coord_flag)
+  if (!attr_aps.spherical_coord_flag && attr_aps.attrInterPredictionEnabled)
     for (auto i = 0; i < _currentPointCloud.getPointCount(); i++)
       _currentPointCloud[i] += _sliceOrigin;
 
@@ -1300,7 +1300,7 @@ PCCTMC3Decoder3::decodeAttributeBrick(const PayloadBuffer& buf)
     refCloud = _currentPointCloud;
   }
 
-  if (!attr_aps.spherical_coord_flag)
+  if (!attr_aps.spherical_coord_flag && attr_aps.attrInterPredictionEnabled)
     for (auto i = 0; i < _currentPointCloud.getPointCount(); i++)
       _currentPointCloud[i] -= _sliceOrigin;
 
