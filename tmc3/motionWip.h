@@ -84,9 +84,7 @@ void SearchGlobalMotion(
 	int th_dist,
   uint32_t maxBB,
   const bool useCuboidalRegionsInGMEstimation,
-  std::vector<int>& gm_matrix,
-  Vec3<int>& gm_trans,
-  const std::pair<int, int> thresh);
+  GlobalMotionParams &gm_param);
 
 void SearchGlobalMotionPerTile(
   PCCPointSet3& pointCloud,

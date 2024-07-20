@@ -47,6 +47,7 @@
 #include "PCCPointSet.h"
 #include "entropy.h"
 #include "geometry_octree.h"
+#include "hls.h"
 
 namespace pcc {
 
@@ -747,9 +748,7 @@ SearchGlobalMotion(
   int th_dist,
   uint32_t maxBB,
   const bool useCuboidalRegionsInGMEstimation,
-  std::vector<int>& gm_matrix,
-  Vec3<int>& gm_trans,
-  const std::pair<int, int> thresh)
+  GlobalMotionParams& gm_params)
 {
   // ------------- first pass: find world-referential-likely LPU ----
   // number of LCU
@@ -758,8 +757,8 @@ SearchGlobalMotion(
   // loop on LCU
   std::vector<Vec3<int>> pcLikelyWorld;
 
-  int topZ = thresh.first;
-  int bottomZ = thresh.second;
+  int topZ = gm_params.gm_thres.first;
+  int bottomZ = gm_params.gm_thres.second;
   int blocknumInAxis = (maxBB_Scalled % bsize) ? (maxBB_Scalled / bsize + 1)
                                                : (maxBB_Scalled / bsize);
 
@@ -832,9 +831,9 @@ SearchGlobalMotion(
 
   for (int i = 0; i < 3; i++) {
     for (int j = 0; j < 3; j++) {
-      gm_matrix[3 * i + j] = Mat_GM_Q[j][i];
+      gm_params.gm_matrix[3 * i + j] = Mat_GM_Q[j][i];
     }
-    gm_trans[i] = Mat_GM_Q[3][i];
+    gm_params.gm_trans[i] = Mat_GM_Q[3][i];
   }
 }
 
@@ -854,13 +853,11 @@ SearchGlobalMotionPerTile(
   if (predDir)
     SearchGlobalMotion(
       pointCloud, pointPredictor, QS, gbh.motion_block_size[2], th_dist, maxBB,
-      useCuboidalRegionsInGMEstimation, gbh.gm_matrix2, gbh.gm_trans2,
-      gbh.gm_thresh2);
+      useCuboidalRegionsInGMEstimation, gbh.gm_param[1]);
   else
     SearchGlobalMotion(
       pointCloud, pointPredictor, QS, gbh.motion_block_size[2], th_dist, maxBB,
-      useCuboidalRegionsInGMEstimation, gbh.gm_matrix, gbh.gm_trans,
-      gbh.gm_thresh);
+      useCuboidalRegionsInGMEstimation, gbh.gm_param[0]);
 }
 
 //----------------------------------------------------------------------------
@@ -944,10 +941,13 @@ compensateWithCuboidPartition(
 {
   if (predDir)
     applyGlobalMotion_with_shift(
-      pointPredictorWorld, gbh.gm_matrix2, gbh.gm_trans2, minimum_position);
+      pointPredictorWorld, gbh.gm_param[1].gm_matrix,
+      gbh.gm_param[1].gm_trans,
+      minimum_position);
   else
     applyGlobalMotion_with_shift(
-      pointPredictorWorld, gbh.gm_matrix, gbh.gm_trans, minimum_position);
+      pointPredictorWorld, gbh.gm_param[0].gm_matrix, gbh.gm_param[0].gm_trans,
+      minimum_position);
 
   std::unique_ptr<int[]> bufferPoints;
   bufferPoints.reset(new int[3 * 3000 * 10000]);
@@ -975,10 +975,13 @@ decodeCompensateWithCuboidPartition(
 {
   if (predDir)
     applyGlobalMotion_with_shift(
-      pointPredictorWorld, gbh.gm_matrix2, gbh.gm_trans2, minimum_position);
+      pointPredictorWorld, gbh.gm_param[1].gm_matrix,
+      gbh.gm_param[1].gm_trans,
+      minimum_position);
   else
     applyGlobalMotion_with_shift(
-      pointPredictorWorld, gbh.gm_matrix, gbh.gm_trans, minimum_position);
+      pointPredictorWorld, gbh.gm_param[0].gm_matrix, gbh.gm_param[0].gm_trans,
+      minimum_position);
 
   PCCPointSet3 compensatedPointCloud;
 

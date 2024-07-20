@@ -1482,7 +1482,7 @@ write(
     bs.writeUn(segmentBits, gbh.num_unique_segments_minus1);
     bs.writeUe(gbh.trisoup_vertex_quantization_bits);
     bs.write(gbh.trisoup_centroid_vertex_residual_flag);
-    if( gbh.trisoup_centroid_vertex_residual_flag ){
+    if (gbh.trisoup_centroid_vertex_residual_flag) {
       bs.write(gbh.trisoup_face_vertex_flag);
     }
     bs.write(gbh.trisoup_halo_flag);
@@ -1526,54 +1526,60 @@ write(
   else
     assert(!gbh.interPredictionEnabledFlag);
 
-  if (gps.biPredictionEnabledFlag)
-    bs.write(gbh.biPredictionEnabledFlag);
-  else
-    assert(!gbh.biPredictionEnabledFlag);
-
-  if (gbh.interPredictionEnabledFlag && gps.globalMotionEnabled) {
-    if (gps.predgeom_enabled_flag)
-      bs.write(gbh.interFrameRefGmcFlag);
+  if (gbh.interPredictionEnabledFlag) {
+    if (gps.globalMotionEnabled) {
+      if (gps.predgeom_enabled_flag)
+        bs.write(gbh.interFrameRefGmcFlag);
       if (!gps.predgeom_enabled_flag || gbh.interFrameRefGmcFlag) {
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < 3; i++) {
           for (int j = 0; j < 3; j++) {
-            if (i == 3)
-              bs.writeSe(gbh.gm_trans[j]);
-            else if (i == j)
-              bs.writeSe(gbh.gm_matrix[3 * i + j] - 65536);
+            if (i == j)
+              bs.writeSe(gbh.gm_param[0].gm_matrix[3 * i + j] - 65536);
             else
-              bs.writeSe(gbh.gm_matrix[3 * i + j]);
+              bs.writeSe(gbh.gm_param[0].gm_matrix[3 * i + j]);
           }
         }
+        for (int j = 0; j < 3; j++)
+          bs.writeSe(gbh.gm_param[0].gm_trans[j]);
       }
-    if (gbh.biPredictionEnabledFlag) {
-      bs.write(gbh.interFrameRefGmcFlag2);
-      for (int i = 0; i < 4; i++) {
-        for (int j = 0; j < 3; j++) {
-          if (i == 3)
-            bs.writeSe(gbh.gm_trans2[j]);
-          else if (i == j)
-            bs.writeSe(gbh.gm_matrix2[3 * i + j] - 65536);
-          else
-            bs.writeSe(gbh.gm_matrix2[3 * i + j]);
+      if (!gps.predgeom_enabled_flag) {
+        bs.writeUe(gbh.lpu_type);
+        bs.write(gbh.min_zero_origin_flag);
+        if (gbh.lpu_type != 0)
+          for (int i = 0; i < 3; i++)
+            bs.writeUe(gbh.motion_block_size[i]);
+      }
+      const bool signalThres0 = (gps.predgeom_enabled_flag || !gbh.lpu_type)
+        && (!gps.predgeom_enabled_flag || gbh.interFrameRefGmcFlag);
+      if (signalThres0) {
+        bs.writeSe(gbh.gm_param[0].gm_thres.first);
+        bs.writeSe(gbh.gm_param[0].gm_thres.second);
+      }
+    }
+    if (gps.biPredictionEnabledFlag)
+      bs.write(gbh.biPredictionEnabledFlag);
+    else
+      assert(!gbh.biPredictionEnabledFlag);
+    if (gbh.biPredictionEnabledFlag && gps.globalMotionEnabled) {
+      if (gps.predgeom_enabled_flag)
+        bs.write(gbh.interFrameRefGmcFlag2);
+      if (!gps.predgeom_enabled_flag || gbh.interFrameRefGmcFlag2) {
+        for (int i = 0; i < 3; i++) {
+          for (int j = 0; j < 3; j++) {
+            if (i == j)
+              bs.writeSe(gbh.gm_param[1].gm_matrix[3 * i + j] - 65536);
+            else
+              bs.writeSe(gbh.gm_param[1].gm_matrix[3 * i + j]);
+          }
         }
+        for (int j = 0; j < 3; j++)
+          bs.writeSe(gbh.gm_param[1].gm_trans[j]);
       }
-    }
-    if (!gps.predgeom_enabled_flag) {
-      bs.writeUe(gbh.lpu_type);
-      bs.write(gbh.min_zero_origin_flag);
-      if (gbh.lpu_type != 0)
-        for (int i = 0; i < 3; i++)
-          bs.writeUe(gbh.motion_block_size[i]);
-    }
-    if (gps.predgeom_enabled_flag || !gbh.lpu_type) {
-      if (!gps.predgeom_enabled_flag || gbh.interFrameRefGmcFlag) {
-        bs.writeSe(gbh.gm_thresh.first);
-        bs.writeSe(gbh.gm_thresh.second);
-      }
-      if (gbh.biPredictionEnabledFlag) {
-        bs.writeSe(gbh.gm_thresh2.first);
-        bs.writeSe(gbh.gm_thresh2.second);
+      const bool signalThres1 = (gps.predgeom_enabled_flag || !gbh.lpu_type)
+        && (!gps.predgeom_enabled_flag || gbh.interFrameRefGmcFlag2);
+      if (signalThres1) {
+        bs.writeSe(gbh.gm_param[1].gm_thres.first);
+        bs.writeSe(gbh.gm_param[1].gm_thres.second);
       }
     }
   }
@@ -1743,67 +1749,63 @@ parseGbh(
     bs.read(&gbh.interPredictionEnabledFlag);
   else
     gbh.interPredictionEnabledFlag = false;
-  if (gps.biPredictionEnabledFlag)
-    bs.read(&gbh.biPredictionEnabledFlag);
-  else
-    gbh.biPredictionEnabledFlag = false;
 
-  gbh.gm_matrix = {65536, 0, 0, 0, 65536, 0, 0, 0, 65536};
-  gbh.gm_trans = 0;
-  gbh.gm_thresh = {0, 0};
-  gbh.gm_matrix2 = {65536, 0, 0, 0, 65536, 0, 0, 0, 65536};
-  gbh.gm_trans2 = 0;
-  gbh.gm_thresh2 = {0, 0}; 
+
+  gbh.gm_param[0].init();
+  gbh.gm_param[1].init();
   gbh.motion_block_size = {0, 0, 0};
   gbh.interFrameRefGmcFlag = false;
   gbh.interFrameRefGmcFlag2 = false;
-  if (gbh.interPredictionEnabledFlag && gps.globalMotionEnabled) {
-    if (gps.predgeom_enabled_flag)
-      bs.read(&gbh.interFrameRefGmcFlag);
-    int val;
-    if (!gps.predgeom_enabled_flag || gbh.interFrameRefGmcFlag) {
-      for (int i = 0; i < 4; i++) {
-        for (int j = 0; j < 3; j++) {
-          bs.readSe(&val);
-          if (i == 3)
-            gbh.gm_trans[j] = val;
-          else if (i == j)
-            gbh.gm_matrix[3 * i + j] = 65536 + val;
-          else
-            gbh.gm_matrix[3 * i + j] = val;
-        }
-      }
-    }
-    if (gbh.biPredictionEnabledFlag) {
-      bs.read(&gbh.interFrameRefGmcFlag2);
-      for (int i = 0; i < 4; i++) {
-        for (int j = 0; j < 3; j++) {
-          bs.readSe(&val);
-          if (i == 3)
-            gbh.gm_trans2[j] = val;
-          else if (i == j)
-            gbh.gm_matrix2[3 * i + j] = 65536 + val;
-          else
-            gbh.gm_matrix2[3 * i + j] = val;
-        }
-      }
-    }
-    if (!gps.predgeom_enabled_flag) {
-      bs.readUe(&gbh.lpu_type);
-      // temporal...
-      bs.read(&gbh.min_zero_origin_flag);
-      if (gbh.lpu_type != 0)
-        for (int i = 0; i < 3; i++)
-          bs.readUe(&gbh.motion_block_size[i]);
-    }
-    if (gps.predgeom_enabled_flag || !gbh.lpu_type) {
+  gbh.biPredictionEnabledFlag = false;
+  if (gbh.interPredictionEnabledFlag) {
+    if (gps.globalMotionEnabled) {
+      if (gps.predgeom_enabled_flag)
+        bs.read(&gbh.interFrameRefGmcFlag);
       if (!gps.predgeom_enabled_flag || gbh.interFrameRefGmcFlag) {
-        bs.readSe(&gbh.gm_thresh.first);
-        bs.readSe(&gbh.gm_thresh.second);
+        for (int i = 0; i < 3; i++) {
+          for (int j = 0; j < 3; j++)
+            bs.readSe(&gbh.gm_param[0].gm_matrix[3 * i + j]);
+          gbh.gm_param[0].gm_matrix[3 * i + i] += 65536;
+        }
+        for (int j = 0; j < 3; j++)
+          bs.readSe(&gbh.gm_param[0].gm_trans[j]);
       }
-      if (gbh.biPredictionEnabledFlag) {
-        bs.readSe(&gbh.gm_thresh2.first);
-        bs.readSe(&gbh.gm_thresh2.second);
+
+      if (!gps.predgeom_enabled_flag) {
+        bs.readUe(&gbh.lpu_type);
+        bs.read(&gbh.min_zero_origin_flag);
+        if (gbh.lpu_type != 0)
+          for (int i = 0; i < 3; i++)
+            bs.readUe(&gbh.motion_block_size[i]);
+      }
+      const bool signalThres0 = (gps.predgeom_enabled_flag || !gbh.lpu_type)
+        && (!gps.predgeom_enabled_flag
+            || gbh.interFrameRefGmcFlag);  // to be simplified
+      if (signalThres0) {
+        bs.readSe(&gbh.gm_param[0].gm_thres.first);
+        bs.readSe(&gbh.gm_param[0].gm_thres.second);
+      }
+    }
+    if (gps.biPredictionEnabledFlag)
+      bs.read(&gbh.biPredictionEnabledFlag);
+    if (gbh.biPredictionEnabledFlag && gps.globalMotionEnabled) {
+      if (gps.predgeom_enabled_flag)
+        bs.read(&gbh.interFrameRefGmcFlag2);
+      if (!gps.predgeom_enabled_flag || gbh.interFrameRefGmcFlag2) {
+        for (int i = 0; i < 3; i++) {
+          for (int j = 0; j < 3; j++)
+            bs.readSe(&gbh.gm_param[1].gm_matrix[3 * i + j]);
+          gbh.gm_param[1].gm_matrix[3 * i + i] += 65536;
+        }
+        for (int j = 0; j < 3; j++)
+          bs.readSe(&gbh.gm_param[1].gm_trans[j]);
+      }
+      const bool signalThres1 = (gps.predgeom_enabled_flag || !gbh.lpu_type)
+        && (!gps.predgeom_enabled_flag
+            || gbh.interFrameRefGmcFlag2);  // to be simplified
+      if (signalThres1) {
+        bs.readSe(&gbh.gm_param[1].gm_thres.first);
+        bs.readSe(&gbh.gm_param[1].gm_thres.second);
       }
     }
   }

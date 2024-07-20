@@ -1541,11 +1541,13 @@ compensateGlobalMotion(
   case 0:  // object and road classification
     if (predDir)
       compensateWithRoadObjClassfication(
-        pointPredictorWorld, gbh.gm_matrix2, gbh.gm_trans2, gbh.gm_thresh2,
+        pointPredictorWorld, gbh.gm_param[1].gm_matrix,
+        gbh.gm_param[1].gm_trans, gbh.gm_param[1].gm_thres,
         minimum_position);
     else
       compensateWithRoadObjClassfication(
-        pointPredictorWorld, gbh.gm_matrix, gbh.gm_trans, gbh.gm_thresh,
+        pointPredictorWorld, gbh.gm_param[0].gm_matrix,
+        gbh.gm_param[0].gm_trans, gbh.gm_param[0].gm_thres,
         minimum_position);
     break;
   case 1:  // cuboid partition

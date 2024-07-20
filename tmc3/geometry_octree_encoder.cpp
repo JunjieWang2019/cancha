@@ -1775,6 +1775,7 @@ applyGlobalMotion(
   Vec3<int> minimum_position;
 
   // search for global motion
+  auto& gm_param = gbh.gm_param;
   switch (params.motionSrc) {
   case InterGeomEncOpts::kExternalGMSrc:
     gbh.min_zero_origin_flag = false;
@@ -1782,41 +1783,41 @@ applyGlobalMotion(
     if (gps.biPredictionEnabledFlag) {
       if (predDir)
         params.motionParams.getMotionParamsMultiple2(
-          gbh.gm_thresh2, gbh.gm_matrix2, gbh.gm_trans2,
+          gm_param[1].gm_thres, gm_param[1].gm_matrix, gm_param[1].gm_trans,
           biPredEncodeParams.currentFrameIndex,
           biPredEncodeParams.refFrameIndex2);
       else
         params.motionParams.getMotionParamsMultiple2(
-          gbh.gm_thresh, gbh.gm_matrix, gbh.gm_trans,
+          gm_param[0].gm_thres, gm_param[0].gm_matrix, gm_param[0].gm_trans,
           biPredEncodeParams.currentFrameIndex,
           biPredEncodeParams.refFrameIndex);
     } else
       params.motionParams.getMotionParams(
-        gbh.gm_thresh, gbh.gm_matrix, gbh.gm_trans);
+        gm_param[0].gm_thres, gm_param[0].gm_matrix, gm_param[0].gm_trans);
     break;
   case InterGeomEncOpts::kInternalLMSGMSrc:
     if (params.lpuType != InterGeomEncOpts::kCuboidPartition) {
       if (gps.biPredictionEnabledFlag) {
         if (predDir)
           params.motionParams.getMotionParamsMultiple2(
-            gbh.gm_thresh2, gbh.gm_matrix2, gbh.gm_trans2,
+            gm_param[1].gm_thres, gm_param[1].gm_matrix, gm_param[1].gm_trans,
             biPredEncodeParams.currentFrameIndex,
             biPredEncodeParams.refFrameIndex2);
         else
           params.motionParams.getMotionParamsMultiple2(
-            gbh.gm_thresh, gbh.gm_matrix, gbh.gm_trans,
+            gm_param[0].gm_thres, gm_param[0].gm_matrix, gm_param[0].gm_trans,
             biPredEncodeParams.currentFrameIndex,
             biPredEncodeParams.refFrameIndex);
       } else {
         params.motionParams.getMotionParams(
-          gbh.gm_thresh, gbh.gm_matrix, gbh.gm_trans);
+          gm_param[0].gm_thres, gm_param[0].gm_matrix, gm_param[0].gm_trans);
       }
       if (predDir) {
-        gbh.gm_thresh2.first -= sps.seqBoundingBoxOrigin[2];
-        gbh.gm_thresh2.second -= sps.seqBoundingBoxOrigin[2];
+        gm_param[1].gm_thres.first -= sps.seqBoundingBoxOrigin[2];
+        gm_param[1].gm_thres.second -= sps.seqBoundingBoxOrigin[2];
       } else {
-        gbh.gm_thresh.first -= sps.seqBoundingBoxOrigin[2];
-        gbh.gm_thresh.second -= sps.seqBoundingBoxOrigin[2];
+        gm_param[0].gm_thres.first -= sps.seqBoundingBoxOrigin[2];
+        gm_param[0].gm_thres.second -= sps.seqBoundingBoxOrigin[2];
       }
     }
     minimum_position = {0, 0, 0};
@@ -1833,11 +1834,13 @@ applyGlobalMotion(
   case InterGeomEncOpts::kRoadObjClassfication:
     if (predDir)
       compensateWithRoadObjClassfication(
-        pointPredictorWorld, gbh.gm_matrix2, gbh.gm_trans2, gbh.gm_thresh2,
+        pointPredictorWorld,  gm_param[1].gm_matrix, gm_param[1].gm_trans,
+        gm_param[1].gm_thres,
         minimum_position);
     else
       compensateWithRoadObjClassfication(
-        pointPredictorWorld, gbh.gm_matrix, gbh.gm_trans, gbh.gm_thresh,
+        pointPredictorWorld, gm_param[0].gm_matrix, gm_param[0].gm_trans,
+        gm_param[0].gm_thres, 
         minimum_position);
     break;
   case InterGeomEncOpts::kCuboidPartition:

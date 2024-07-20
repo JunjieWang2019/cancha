@@ -669,11 +669,15 @@ PCCTMC3Decoder3::decodeGeometryBrick(const PayloadBuffer& buf)
         }
         if (_gps->globalMotionEnabled){
           _refFrameSph.setFrameMovingState(_gbh.interFrameRefGmcFlag);
-          _refFrameSph.setMotionParams(_gbh.gm_thresh, _gbh.gm_matrix, _gbh.gm_trans);
+          _refFrameSph.setMotionParams(
+            _gbh.gm_param[0].gm_thres, _gbh.gm_param[0].gm_matrix,
+            _gbh.gm_param[0].gm_trans);
           _refFrameSph.setRefFrameCtr(_refFrameSph.getFrameCtr() + 1);
           if (_gbh.biPredictionEnabledFlag){
             biPredDecodeParams._refFrameSph2.setFrameMovingState(_gbh.interFrameRefGmcFlag2);
-            biPredDecodeParams._refFrameSph2.setMotionParams(_gbh.gm_thresh2, _gbh.gm_matrix2, _gbh.gm_trans2);    
+            biPredDecodeParams._refFrameSph2.setMotionParams(
+              _gbh.gm_param[1].gm_thres, _gbh.gm_param[1].gm_matrix,
+              _gbh.gm_param[1].gm_trans);    
             biPredDecodeParams._refFrameSph2.setRefFrameCtr(biPredDecodeParams._refFrameSph2.getFrameCtr() + 1);        
           }
         }
@@ -688,7 +692,8 @@ PCCTMC3Decoder3::decodeGeometryBrick(const PayloadBuffer& buf)
         if (_gps->globalMotionEnabled) {
           _refFrameSph.setFrameMovingState(_gbh.interFrameRefGmcFlag);
           _refFrameSph.setMotionParams(
-            _gbh.gm_thresh, _gbh.gm_matrix, _gbh.gm_trans);
+            _gbh.gm_param[0].gm_thres, _gbh.gm_param[0].gm_matrix,
+            _gbh.gm_param[0].gm_trans);
         }
         _refFrameSph.updateFrame(
           *_gps, *_refFrameAlt, minPos_ref, _apss[0].attr_coord_scale);

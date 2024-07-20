@@ -656,6 +656,18 @@ struct GeometryBrickFooter {
 };
 
 //============================================================================
+struct GlobalMotionParams {
+  std::vector<int> gm_matrix;
+  Vec3<int> gm_trans;
+  std::pair<int, int> gm_thres;
+  GlobalMotionParams() { init(); }
+  void init() { 
+    gm_matrix = {65536, 0, 0, 0, 65536, 0, 0, 0, 65536};
+    gm_trans = 0;
+    gm_thres = {0, 0};
+  }
+};
+//============================================================================
 
 struct GeometryBrickHeader {
   int geom_geom_parameter_set_id;
@@ -786,14 +798,9 @@ struct GeometryBrickHeader {
   bool biPredictionEnabledFlag;
 
   // Indicates the global motion information of the reference frame
-  std::vector<int> gm_matrix;
-  Vec3<int> gm_trans;
-  std::pair<int, int> gm_thresh;
-
-  // Indicates the global motion information of the second reference frame (if have)
-  std::vector<int> gm_matrix2;
-  Vec3<int> gm_trans2;
-  std::pair<int, int> gm_thresh2;
+  // Index 0 corresponds to first ref frame
+  // Index 1 corresponds to second ref frame
+  GlobalMotionParams gm_param[2];
 
   bool interFrameRefGmcFlag;
   bool interFrameRefGmcFlag2;

@@ -1850,13 +1850,9 @@ PCCTMC3Encoder3::encodeGeometryBrick(
     params->gbh.geom_qp_offset_intvl_log2_delta;
   gbh.interFrameRefGmcFlag = false;
   gbh.interFrameRefGmcFlag2 = false;
-  gbh.gm_matrix = {65536, 0, 0, 0, 65536, 0, 0, 0, 65536};
-  gbh.gm_trans = 0;
-  gbh.gm_thresh = {0, 0};
+  gbh.gm_param[0].init();
   gbh.biPredictionEnabledFlag = biPredEncodeParams.codeCurrentFrameAsBFrame;
-  gbh.gm_matrix2 = {65536, 0, 0, 0, 65536, 0, 0, 0, 65536};
-  gbh.gm_trans2 = 0;
-  gbh.gm_thresh2 = {0, 0};
+  gbh.gm_param[1].init();
   if (gbh.interPredictionEnabledFlag && !_gps->predgeom_enabled_flag) {
     gbh.lpu_type = params->interGeom.lpuType;
     gbh.motion_block_size = params->gbh.motion_block_size;
@@ -2117,14 +2113,20 @@ PCCTMC3Encoder3::encodeGeometryBrick(
 		  if (gbh.biPredictionEnabledFlag)
 			  gbh.interFrameRefGmcFlag2 = biPredEncodeParams._refFrameSph2.getFrameMovingState();
 		  if (_gps->biPredictionEnabledFlag) {
-			  _refFrameSph.getMotionParamsMultiple(gbh.gm_thresh, gbh.gm_matrix, gbh.gm_trans,
+        _refFrameSph.getMotionParamsMultiple(
+          gbh.gm_param[0].gm_thres, gbh.gm_param[0].gm_matrix,
+          gbh.gm_param[0].gm_trans,
 				  biPredEncodeParams.currentFrameIndex, biPredEncodeParams.refFrameIndex);
 			  if (gbh.biPredictionEnabledFlag)
-				  biPredEncodeParams._refFrameSph2.getMotionParamsMultiple(gbh.gm_thresh2, gbh.gm_matrix2, gbh.gm_trans2,
+          biPredEncodeParams._refFrameSph2.getMotionParamsMultiple(
+            gbh.gm_param[1].gm_thres, gbh.gm_param[1].gm_matrix,
+            gbh.gm_param[1].gm_trans,
 					  biPredEncodeParams.currentFrameIndex, biPredEncodeParams.refFrameIndex2);
 		  }
 		  else
-			  _refFrameSph.getMotionParams(gbh.gm_thresh, gbh.gm_matrix, gbh.gm_trans);
+        _refFrameSph.getMotionParams(
+          gbh.gm_param[0].gm_thres, gbh.gm_param[0].gm_matrix,
+          gbh.gm_param[0].gm_trans);
 	  }
 
 	  attrInterPredParams.frameDistance = 1;
@@ -2135,7 +2137,9 @@ PCCTMC3Encoder3::encodeGeometryBrick(
 		  && _aps[params->attributeIdxMap.begin()->second]->attr_encoding
 		  != AttributeEncoding::kRAHTransform) {
 		  auto checkMovingState =
-			  [&](const VecInt& mat, const pcc::point_t& tran) -> bool {
+			  [&](const GlobalMotionParams &gm_param) -> bool {
+               const VecInt& mat = gm_param.gm_matrix;
+              const pcc::point_t& tran = gm_param.gm_trans;
 			  const double scale = 65536.;
 			  const double thr1_pre = 0.1 / attrInterPredParams.frameDistance;
 			  const double thr2_pre = params->attrInterPredTranslationThreshold;
@@ -2154,11 +2158,11 @@ PCCTMC3Encoder3::encodeGeometryBrick(
 				  && Sx < thr2_pre&& Sy < thr2_pre&& Sz < thr2_pre);
 		  };
 
-		  movingState = checkMovingState(gbh.gm_matrix, gbh.gm_trans);
+		  movingState = checkMovingState(gbh.gm_param[0]);
 
 		  if (gbh.biPredictionEnabledFlag) {
 			  biPredEncodeParams.movingState2 =
-				  checkMovingState(gbh.gm_matrix2, gbh.gm_trans2);
+				  checkMovingState(gbh.gm_param[1]);
 		  }
 	  }
 
