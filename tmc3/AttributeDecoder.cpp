@@ -765,7 +765,6 @@ AttributeDecoder::decodeReflectancesRaht(
   }
   else {
     if (enableRDOCodinglayer) {
-      predDecoder.reset();
       predDecoder.set(&decoder.arithmeticDecoder);
     }
   }
@@ -874,7 +873,6 @@ AttributeDecoder::decodeColorsRaht(
   }
   else {
     if (enableRDOCodinglayer) {
-      predDecoder.reset();
       predDecoder.set(&decoder.arithmeticDecoder);
     }
   }

@@ -47,15 +47,7 @@ namespace pcc {
 
 class ModeCoder
 {
-protected:
-  AdaptiveBitModel ctxInterPred;
-  AdaptiveBitModel ctxIntraPred;
 public:
-  void reset()
-  {
-    ctxInterPred.probability = 0x8000;
-    ctxIntraPred.probability = 0x8000;
-  }
   void updateInterIntraEnabled(bool flag, bool flag2, int flag3) {
 
   }
@@ -107,15 +99,15 @@ public:
     else {
       if (enableInter) {
         const bool& isInter = predMode == 1;
-        arith->encode(isInter, ctxInterPred);
+        arith->encode(isInter);
         if (enableIntra && !isInter) {
           const bool& isIntraPred = predMode == 0;
-          arith->encode(isIntraPred, ctxIntraPred);
+          arith->encode(isIntraPred);
         }
       }
       else if (enableIntra) {
         const bool& isIntraPredMode = predMode == 0;
-        arith->encode(isIntraPredMode, ctxIntraPred);
+        arith->encode(isIntraPredMode);
       }
     }
   }
@@ -134,18 +126,18 @@ public:
   {
     if (enableInter) {
       bool isInter;
-      isInter = arith->decode(ctxInterPred);
+      isInter = arith->decode();
       if (isInter)
         return 1;
       if (!enableIntra)
         return 0;
-      bool isIntraPred = arith->decode(ctxIntraPred);
+      bool isIntraPred = arith->decode();
       if (isIntraPred)
         return 0;
       return 2;
     }
     else if (enableIntra) {
-      bool isIntraPred = arith->decode(ctxIntraPred);
+      bool isIntraPred = arith->decode();
       if (isIntraPred)
         return 0;
       return 1;

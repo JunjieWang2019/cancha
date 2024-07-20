@@ -1557,7 +1557,6 @@ AttributeEncoder::encodeReflectancesTransformRaht(
   }
   else {
     if (enableRDOCodinglayer) {
-      predEncoder.reset();
       predEncoder.set(&encoder.arithmeticEncoder);
     }
   }
@@ -1677,7 +1676,6 @@ AttributeEncoder::encodeColorsTransformRaht(
   }
   else {
     if (enableRDOCodinglayer) {
-      predEncoder.reset();
       predEncoder.set(&encoder.arithmeticEncoder);
     }
   }
