@@ -1,4 +1,4 @@
-﻿/* The copyright in this software is being made available under the BSD
+/* The copyright in this software is being made available under the BSD
  * Licence, included below.  This software may be subject to other third
  * party and contributor rights, including patent rights, and no such
  * rights are granted under this licence.
@@ -1896,6 +1896,13 @@ encodeGeometryOctree(
     compensatedPointCloud = pointPredictorWorld;
     for (int i = 0; i < pointPredictorWorld.getPointCount(); i++) {
       pointPredictorWorld[i] -= gbh.geomBoxOrigin;
+      pointPredictorWorld[i].x() = pointPredictorWorld[i].x() >= 0 ? pointPredictorWorld[i].x() : 0;
+      pointPredictorWorld[i].y() = pointPredictorWorld[i].y() >= 0 ? pointPredictorWorld[i].y() : 0;
+      pointPredictorWorld[i].z() = pointPredictorWorld[i].z() >= 0 ? pointPredictorWorld[i].z() : 0;
+
+      compensatedPointCloud[i].x() = compensatedPointCloud[i].x() >= 0 ? compensatedPointCloud[i].x() : 0;
+      compensatedPointCloud[i].y() = compensatedPointCloud[i].y() >= 0 ? compensatedPointCloud[i].y() : 0;
+      compensatedPointCloud[i].z() = compensatedPointCloud[i].z() >= 0 ? compensatedPointCloud[i].z() : 0;
     }
   }
 
@@ -1915,6 +1922,13 @@ encodeGeometryOctree(
     biPredEncodeParams.compensatedPointCloud2 = pointPredictorWorld2;
     for (int i = 0; i < pointPredictorWorld2.getPointCount(); i++) {
       pointPredictorWorld2[i] -= gbh.geomBoxOrigin;
+      pointPredictorWorld2[i].x() = pointPredictorWorld2[i].x() >= 0 ? pointPredictorWorld2[i].x() : 0;
+      pointPredictorWorld2[i].y() = pointPredictorWorld2[i].y() >= 0 ? pointPredictorWorld2[i].y() : 0;
+      pointPredictorWorld2[i].z() = pointPredictorWorld2[i].z() >= 0 ? pointPredictorWorld2[i].z() : 0;
+
+      biPredEncodeParams.compensatedPointCloud2[i].x() = biPredEncodeParams.compensatedPointCloud2[i].x() >= 0 ? biPredEncodeParams.compensatedPointCloud2[i].x() : 0;
+      biPredEncodeParams.compensatedPointCloud2[i].y() = biPredEncodeParams.compensatedPointCloud2[i].y() >= 0 ? biPredEncodeParams.compensatedPointCloud2[i].y() : 0;
+      biPredEncodeParams.compensatedPointCloud2[i].z() = biPredEncodeParams.compensatedPointCloud2[i].z() >= 0 ? biPredEncodeParams.compensatedPointCloud2[i].z() : 0;
     }
 
     // the two reference frames are merged into one

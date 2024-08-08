@@ -1736,6 +1736,13 @@ decodeGeometryOctree(
       compensatedPointCloud = pointPredictorWorld;
       for (int i = 0; i < node00.predEnd; i++) {
         pointPredictorWorld[i] -= gbh.geomBoxOrigin;
+        pointPredictorWorld[i].x() = pointPredictorWorld[i].x() >= 0 ? pointPredictorWorld[i].x() : 0;
+        pointPredictorWorld[i].y() = pointPredictorWorld[i].y() >= 0 ? pointPredictorWorld[i].y() : 0;
+        pointPredictorWorld[i].z() = pointPredictorWorld[i].z() >= 0 ? pointPredictorWorld[i].z() : 0;
+
+        compensatedPointCloud[i].x() = compensatedPointCloud[i].x() >= 0 ? compensatedPointCloud[i].x() : 0;
+        compensatedPointCloud[i].y() = compensatedPointCloud[i].y() >= 0 ? compensatedPointCloud[i].y() : 0;
+        compensatedPointCloud[i].z() = compensatedPointCloud[i].z() >= 0 ? compensatedPointCloud[i].z() : 0;
       }
     }  
 
@@ -1746,6 +1753,13 @@ decodeGeometryOctree(
       compensatedPointCloud2 = pointPredictorWorld;
       for (int i = 0; i < node00.predEnd2; i++) {
         pointPredictorWorld2[i] -= gbh.geomBoxOrigin;
+        pointPredictorWorld2[i].x() = pointPredictorWorld2[i].x() >= 0 ? pointPredictorWorld2[i].x() : 0;
+        pointPredictorWorld2[i].y() = pointPredictorWorld2[i].y() >= 0 ? pointPredictorWorld2[i].y() : 0;
+        pointPredictorWorld2[i].z() = pointPredictorWorld2[i].z() >= 0 ? pointPredictorWorld2[i].z() : 0;
+
+        compensatedPointCloud2[i].x() = compensatedPointCloud2[i].x() >= 0 ? compensatedPointCloud2[i].x() : 0;
+        compensatedPointCloud2[i].y() = compensatedPointCloud2[i].y() >= 0 ? compensatedPointCloud2[i].y() : 0;
+        compensatedPointCloud2[i].z() = compensatedPointCloud2[i].z() >= 0 ? compensatedPointCloud2[i].z() : 0;
       }    
 
 		  if (gps.frameMergeEnabledFlag) {
