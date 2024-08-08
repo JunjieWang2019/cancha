@@ -832,6 +832,45 @@ fwdTransformBlock222(
 }
 
 //============================================================================
+// In-place transform a set of sparse 2x2x2 blocks each using the same weights
+
+template<class Kernel>
+void
+ComputeDCfor222Block(
+  int numBufs, FixedPoint buf[][8], int weights[8 + 8 + 8 + 8])
+{
+  static const int a[4 + 4 + 4] = {0, 2, 4, 6, 0, 4, 1, 5, 0, 1, 2, 3};
+  static const int b[4 + 4 + 4] = {1, 3, 5, 7, 2, 6, 3, 7, 4, 5, 6, 7};
+  static const bool skip[4 + 4 + 4] = {false, false, false, false, false, false, true, true, false, true, true, true};
+  for (int i = 0, iw = 0; i < 12; i++, iw += 2) {
+    if(skip[i])
+      continue;
+    
+    int i0 = a[i];
+    int i1 = b[i];
+    
+    if (weights[iw] + weights[iw + 1] == 0)
+      continue;
+    
+    // only one occupied, propagate to next level
+    if (!weights[iw] || !weights[iw + 1]) {
+      if (!weights[iw]) {
+        for (int k = 0; k < numBufs; k++)
+          std::swap(buf[k][i0], buf[k][i1]);
+      }
+      continue;
+    }
+    
+    // actual transform
+    Kernel kernel(weights[iw], weights[iw + 1]);
+    for (int k = 0; k < numBufs; k++) {
+      auto& bufk = buf[k];
+      kernel.fwdTransform(bufk[i0], bufk[i1], &bufk[i0], &bufk[i1]);
+    }
+  }
+}
+
+//============================================================================
 // In-place inverse transform a set of sparse 2x2x2 blocks each using the
 // same weights
 
@@ -1649,7 +1688,7 @@ uraht_process(
       if (interNode) {
         for (jLast = j; jLast < jEnd; jLast++) {
           int nextNode = jLast > j
-            && !isSibling(weightsLf_ref[jLast].pos, weightsLf_ref[j].pos, level_ref + 3);
+          && !isSibling(weightsLf_ref[jLast].pos, weightsLf_ref[j].pos, level_ref + 3);
           if (nextNode)
             break;
           int nodeIdx = (weightsLf_ref[jLast].pos >> level_ref) & 0x7;
@@ -1657,11 +1696,20 @@ uraht_process(
           sumWeights_ref += (uint64_t) weights_ref[nodeIdx];
           for (int k = 0; k < numAttrs; k++){
             SampleInterPredBuf[k][nodeIdx] = attrsLf_ref[jLast * numAttrs + k];
-            finterDC[k] += SampleInterPredBuf[k][nodeIdx];            
+            finterDC[k] += SampleInterPredBuf[k][nodeIdx];
           }
         }
-
-        if (!rahtPredParams.integer_haar_enable_flag) {
+        
+        if(rahtPredParams.integer_haar_enable_flag){
+          mkWeightTree(weights_ref);
+          std::copy_n(&SampleInterPredBuf[0][0], numAttrs * 8, &transformInterPredBuf[0][0]);
+          ComputeDCfor222Block<HaarKernel>(numAttrs, transformInterPredBuf, weights_ref);
+          for (int k = 0; k < numAttrs; k++) {
+            finterDC[k].val = transformInterPredBuf[k][0].val;
+            interParentMean[k].val = finterDC[k].val;
+          }
+        }
+        else{
           FixedPoint rsqrtWeightSumRef(0);
           int shiftBits = sumWeights_ref > 1024 ? ilog2(sumWeights_ref - 1) >> 1 : 0;
           rsqrtWeightSumRef.val = irsqrt(sumWeights_ref) >> (40 - shiftBits - FixedPoint::kFracBits);
@@ -1672,16 +1720,16 @@ uraht_process(
             interParentMean[k].val >>= shiftBits;
             interParentMean[k] *= rsqrtWeightSumRef;
           }
-
-          int64_t curinheritDC = (inheritDc) ? *attrRecParentUsIt : 0;
-          int64_t interDC = finterDC[0].val;
-
-          if (curinheritDC > 0 && (interDC > 0)) {
-            bool condition1 = 10 * interDC < ((curinheritDC)* 5);
-            bool condition2 = 10 * interDC > ((curinheritDC)* 20);
-            if (condition1 || condition2) {
-              interNode = false;
-            }
+        }
+        
+        int64_t curinheritDC = (inheritDc) ? *attrRecParentUsIt : 0;
+        int64_t interDC = finterDC[0].val;
+        
+        if ((curinheritDC > 0) && (interDC > 0) && (!rahtPredParams.integer_haar_enable_flag)) {
+          bool condition1 = 10 * interDC < ((curinheritDC)* 5);
+          bool condition2 = 10 * interDC > ((curinheritDC)* 20);
+          if (condition1 || condition2) {
+            interNode = false;
           }
         }
       }
@@ -1721,9 +1769,7 @@ uraht_process(
         interNode = false;
       }
 
-      mkWeightTree(weights);     
-      if (rahtPredParams.integer_haar_enable_flag && interNode) 
-        mkWeightTree(weights_ref);
+      mkWeightTree(weights);
 
       // Inter-level prediction:
       //  - Find the parent neighbours of the current node
@@ -1801,10 +1847,30 @@ uraht_process(
       }
 
       bool enableIntraPrediction =
-        curLevelEnableACInterPred && enablePrediction;
+      curLevelEnableACInterPred && enablePrediction;
       bool enableInterPrediction = curLevelEnableACInterPred;
       
-      if(!rahtPredParams.integer_haar_enable_flag) {
+      if(rahtPredParams.integer_haar_enable_flag){
+        if(interNode){
+          for (int childIdx = 0; childIdx < 8; childIdx++) {
+            if(weights[childIdx] == 0){
+              for(int k = 0; k < numAttrs; k++){
+                SampleInterPredBuf[k][childIdx].val = 0;
+              }
+              continue;
+            } else if(weights_ref[childIdx] == 0){
+              for(int k = 0; k < numAttrs; k++){
+                SampleInterPredBuf[k][childIdx].val = interParentMean[k].val;
+              }
+            }
+            for(int k = 0; k < numAttrs; k++)
+              SampleInterPredBuf[k][childIdx].val = (SampleInterPredBuf[k][childIdx].val >> FixedPoint::kFracBits) << (FixedPoint::kFracBits);
+          }
+          enablePrediction = true;
+          std::copy_n(&SampleInterPredBuf[0][0], numAttrs * 8, &SamplePredBuf[0][0]);
+        }
+      }
+      else {
         // normalise coefficients
         if (interNode){
           for (int childIdx = 0; childIdx < 8; childIdx++) {
@@ -1824,22 +1890,22 @@ uraht_process(
               int shift = w > 1024 ? ilog2(w - 1) >> 1 : 0;
               rsqrtWeight.val = irsqrt(w) >> (40 - shift - FixedPoint::kFracBits);
               for (int k = 0; k < numAttrs; k++) {
-                SampleInterPredBuf[k][childIdx].val >>= shift; 
-				SampleInterPredBuf[k][childIdx] *= rsqrtWeight; //sqrt normalized: DC
-                SampleInterPredBuf[k][childIdx].val >>= shift; 
-				SampleInterPredBuf[k][childIdx] *= rsqrtWeight; //mean attribute
+                SampleInterPredBuf[k][childIdx].val >>= shift;
+                SampleInterPredBuf[k][childIdx] *= rsqrtWeight; //sqrt normalized: DC
+                SampleInterPredBuf[k][childIdx].val >>= shift;
+                SampleInterPredBuf[k][childIdx] *= rsqrtWeight; //mean attribute
               }
             }
           }
           enablePrediction = true;
           std::copy_n(&SampleInterPredBuf[0][0], numAttrs * 8, &SamplePredBuf[0][0]);
         }
-      
+        
         for (int childIdx = 0; childIdx < 8; childIdx++) {
-
+          
           if (weights[childIdx] <= 1)
             continue;
-
+          
           // Summed attribute values
           if (isEncoder) {
             FixedPoint rsqrtWeight;
@@ -1851,12 +1917,12 @@ uraht_process(
               SampleBuf[k][childIdx] *= rsqrtWeight;
             }
           }
-        
+          
           // Predicted attribute values
           FixedPoint sqrtWeight;
           if (enablePrediction) {
             sqrtWeight.val =
-              isqrt(uint64_t(weights[childIdx]) << (2 * FixedPoint::kFracBits));
+            isqrt(uint64_t(weights[childIdx]) << (2 * FixedPoint::kFracBits));
             for (int k = 0; k < numAttrs; k++) {
               SamplePredBuf[k][childIdx] *= sqrtWeight;
             }
@@ -1884,19 +1950,6 @@ uraht_process(
         else if (enablePrediction){
           std::copy_n(&SamplePredBuf[0][0], numAttrs * 8, &transformPredBuf[0][0]);
           fwdTransformBlock222<HaarKernel>(numAttrs, transformPredBuf, weights);
-        }
-
-        if (interNode) {
-		  std::copy_n(&SampleInterPredBuf[0][0], numAttrs * 8, &transformInterPredBuf[0][0]);
-          fwdTransformBlock222<HaarKernel>(numAttrs, transformInterPredBuf, weights_ref);
-          for (int childIdx = 0; childIdx < 8; childIdx++) {
-            for (int k = 0; k < numAttrs; k++){
-              int64_t refVal = transformInterPredBuf[k][childIdx].val;
-              // NB: integer haar is not compatible with inter filter.
-              transformPredBuf[k][childIdx].val = refVal;
-            }
-          }
-          enablePrediction = true;
         }
 
         if (isEncoder && enableIntraPrediction){
