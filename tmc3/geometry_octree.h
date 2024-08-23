@@ -940,8 +940,8 @@ protected:
   // For bytewise occupancy coding
   DualLutCoder<true> _bytewiseOccupancyCoder[10];
   // OBUF somplified
-  CtxMapDynamicOBUF _MapOccupancy[4][8];
-  CtxMapDynamicOBUF _MapOccupancySparse[4][8];
+  CtxMapDynamicOBUF _MapOccupancy[2][8];
+  CtxMapDynamicOBUF _MapOccupancySparse[2][8];
   CtxModelDynamicOBUF _CtxMapDynamicOBUF;
 
   uint8_t _BufferOBUFleaves[CtxMapDynamicOBUF::kLeafBufferSize * (1 << CtxMapDynamicOBUF::kLeafDepth)];

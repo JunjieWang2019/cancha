@@ -876,7 +876,7 @@ findLaser(pcc::point_t point, const int* thetaList, const int numTheta)
 void
 GeometryOctreeContexts::resetMap(const bool& enableInter, const bool& enablePlanar)
 {
-  for (int i = 0; i < 4; i++) {
+  for (int i = 0; i < 2; i++) {
     const int n2 = 6;
     _MapOccupancy[i][0].reset(6 + n2 + 1, 18 - 6 - n2); //18
     _MapOccupancy[i][1].reset(6 + n2 + 1, 18 - 6 - n2); //18
@@ -988,7 +988,7 @@ GeometryOctreeContexts::resetMap(const bool& enableInter, const bool& enablePlan
 void
 GeometryOctreeContexts::clearMap(const bool& enableInter, const bool& enablePlanar)
 {
-  for (int j = 0; j < 4; j++)
+  for (int j = 0; j < 2; j++)
     for (int i = 0; i < 8; i++) {
       _MapOccupancy[j][i].clear();
       _MapOccupancySparse[j][i].clear();
