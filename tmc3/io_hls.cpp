@@ -1557,7 +1557,7 @@ write(
           bs.writeSe(gbh.gm_param[0].gm_trans[j]);
       }
       if (!gps.predgeom_enabled_flag) {
-        bs.writeUe(gbh.lpu_type);
+        bs.write(gbh.lpu_type);
         bs.write(gbh.min_zero_origin_flag);
         if (gbh.lpu_type != 0)
           for (int i = 0; i < 3; i++)
@@ -1789,7 +1789,7 @@ parseGbh(
       }
 
       if (!gps.predgeom_enabled_flag) {
-        bs.readUe(&gbh.lpu_type);
+        bs.read(&gbh.lpu_type);
         bs.read(&gbh.min_zero_origin_flag);
         if (gbh.lpu_type != 0)
           for (int i = 0; i < 3; i++)
