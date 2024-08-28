@@ -105,6 +105,48 @@ reduceLevel_decoder(
   return std::distance(weightsIn->begin(), weightsInWrIt);
 }
 
+int
+reduceDepthDecoder(
+  int level,
+  int numNodes,
+  std::vector<UrahtNode>* weightsIn,
+  std::vector<UrahtNode>* weightsOut)
+{
+  // process a single level of the tree
+  int64_t posPrev = -1;
+  auto weightsInRdIt = weightsIn->begin();
+  auto it = weightsIn->begin();
+  for (int i = 0; i < weightsIn->size(); ) {
+    // this is a new node
+    auto last = weightsInRdIt[i];
+    posPrev = last.pos;
+    last.firstChild = it++;
+
+    // look for same node
+    int i2 = i + 1;
+    for (; i2 < weightsIn->size(); i2++,it++)
+      if ((posPrev ^ weightsInRdIt[i2].pos) >> level)
+        break;
+
+    // process same nodes
+    for (int j = i + 1; j < i2; j++) {
+      const auto node = weightsInRdIt[j];
+      last.weight += node.weight;
+      // TODO: fix local qp to be same in encoder and decoder
+      last.qp[0] = (last.qp[0] + node.qp[0]) >> 1;
+      last.qp[1] = (last.qp[1] + node.qp[1]) >> 1;
+    }
+
+    last.lastChild = it;
+    weightsOut->push_back(last);
+    i = i2;
+  }
+
+  // number of nodes in next level
+  return weightsOut->size();
+}
+
+
 //============================================================================
 // Merge sum and difference values to form a tree.
 
@@ -288,7 +330,7 @@ intraDcPred_decoder(
 }
 
 //============================================================================
-// Core transform process (for encoder/decoder)
+// Core transform process (for decoder)
 template<bool haarFlag, int numAttrs, bool rahtExtension, class ModeCoder>
 void
 uraht_process_decoder(
@@ -319,12 +361,6 @@ uraht_process_decoder(
     return;
   }
 
-  std::vector<UrahtNode> weightsLf, weightsHf;
-  std::vector<int64_t> attrsLf, attrsHf;
-
-  std::vector<UrahtNode> weightsLf_ref, weightsHf_ref;
-  std::vector<int64_t> attrsLf_ref, attrsHf_ref;
-
   bool enableLCPPred = rahtPredParams.raht_last_component_prediction_enabled_flag;
 
   bool enableACInterPred = attrInterPredParams.enableAttrInterPred;
@@ -343,83 +379,97 @@ uraht_process_decoder(
   std::vector<int64_t> fixedFilterTaps = {128, 128, 128, 127, 125, 121, 115};
   int skipInitLayersForFiltering = attrInterPredParams.paramsForInterRAHT.skipInitLayersForFiltering;
 
-  weightsLf.reserve(numPoints);
-  attrsLf.reserve(numPoints * numAttrs);
-
   int regionQpShift = 4;
   const int maxAcCoeffQpOffsetLayers = qpset.rahtAcCoeffQps.size() - 1;
+
+  std::vector<UrahtNode> weightsHf;
+  std::vector<std::vector<UrahtNode>> weightsLfStack;
+
+  weightsLfStack.emplace_back();
+  weightsLfStack.back().reserve(numPoints);
+  auto weightsLf = &weightsLfStack.back();
 
   // copy positions into internal form
   // no need to copy attribute at decoder side
   for (int i = 0; i < numPoints; i++) {
     UrahtNode node;
     node.pos = positions[i];
-	node.weight = 1;
-	node.qp = {
-      int16_t(pointQpOffsets[i][0] << regionQpShift),
-      int16_t(pointQpOffsets[i][1] << regionQpShift)};
-    weightsLf.emplace_back(node);
+    node.weight = 1;
+    node.qp = {
+		int16_t(pointQpOffsets[i][0] << regionQpShift),
+        int16_t(pointQpOffsets[i][1] << regionQpShift)};
+    weightsLf->emplace_back(node);
   }
 
-  weightsHf.reserve(numPoints);
-  attrsHf.reserve(numPoints * numAttrs);
+  std::vector<UrahtNode> weightsHf_ref;
+  std::vector<std::vector<UrahtNode>> weightsLfStack_ref;
+
+  weightsLfStack_ref.emplace_back();
+  weightsLfStack_ref.back().reserve(attrInterPredParams.paramsForInterRAHT.voxelCount);
+  auto weightsLf_ref = &weightsLfStack_ref.back();
 
   if (enableACInterPred) {
-    weightsLf_ref.reserve(attrInterPredParams.paramsForInterRAHT.voxelCount);
-    attrsLf_ref.reserve(attrInterPredParams.paramsForInterRAHT.voxelCount * numAttrs);
-
+ 
     for (int i = 0; i < attrInterPredParams.paramsForInterRAHT.voxelCount; i++) {
       UrahtNode node_ref;
       node_ref.pos = attrInterPredParams.paramsForInterRAHT.mortonCode[i];
       node_ref.weight = 1;
       node_ref.qp = {0, 0};
-      weightsLf_ref.emplace_back(node_ref);
       for (int k = 0; k < numAttrs; k++) {
-        attrsLf_ref.push_back(attrInterPredParams.paramsForInterRAHT.attributes[i * numAttrs + k]);
+        node_ref.sumAttr[k] =
+          attrInterPredParams.paramsForInterRAHT.attributes[i * numAttrs + k];
       }
-    }
 
-    weightsHf_ref.reserve(attrInterPredParams.paramsForInterRAHT.voxelCount);
-    attrsHf_ref.reserve(attrInterPredParams.paramsForInterRAHT.voxelCount * numAttrs);
+      weightsLf_ref->emplace_back(node_ref);
+    }
   }
   
   // ascend tree
-  std::vector<int> levelHfPos;
-  std::vector<int> levelHfPos_ref;
+  int numNodes = weightsLf->size();
+  // process any duplicate points
+  numNodes = reduceUnique_decoder(numNodes, weightsLf, &weightsHf);
+  weightsLfStack[0].resize(numNodes);//shrink
 
-  int numDupNodes = numPoints;
+  const bool flagNoDuplicate = weightsHf.size() == 0;
 
-  for (int level = 0, numNodes = weightsLf.size(); numNodes > 1; level++) {
-    levelHfPos.push_back(weightsHf.size());
-    if (level == 0) {
-      // process any duplicate points
-      numNodes = reduceUnique_decoder(numNodes, &weightsLf, &weightsHf);
-      numDupNodes -= numNodes;
-    } else {
-      // normal level reduction
-      numNodes = reduceLevel_decoder(level, numNodes, &weightsLf, &weightsHf);
+  int numDepth = 0;
+  for (int levelD = 3; numNodes > 1; levelD += 3) {
+    // one depth reduction
+    weightsLfStack.emplace_back();
+    weightsLfStack.back().reserve(numNodes / 3);
+    weightsLf = &weightsLfStack.back();
+
+    auto weightsLfRefold = &weightsLfStack[weightsLfStack.size() - 2];
+    numNodes =
+      reduceDepthDecoder(levelD, numNodes, weightsLfRefold, weightsLf);
+    numDepth++;
+  }
+
+  int numDepth_ref = 0;  
+  if (enableACInterPred){
+
+    int numNodes = weightsLf_ref->size();
+    numNodes = reduceUnique<haarFlag, numAttrs>(numNodes, weightsLf_ref, &weightsHf_ref);
+    weightsLfStack_ref[0].resize(numNodes);
+
+    for (int levelD = 3; numNodes > 1; levelD += 3) {
+      // one depth reduction
+      weightsLfStack_ref.emplace_back();
+      weightsLfStack_ref.back().reserve(numNodes / 3);
+      weightsLf_ref = &weightsLfStack_ref.back();
+
+      auto weightsLfRefold_ref = &weightsLfStack_ref[weightsLfStack_ref.size() - 2];
+      numNodes = reduceDepth<haarFlag, numAttrs>(
+        levelD, numNodes, weightsLfRefold_ref, weightsLf_ref);
+      numDepth_ref++;
     }
   }
-  
-  if (enableACInterPred){
-    for (int level = 0, numNodes = weightsLf_ref.size(); numNodes > 1; level++) {
-      levelHfPos_ref.push_back(weightsHf_ref.size());
-      if (level == 0) {
-        // process any duplicate points
-        numNodes = reduceUnique<haarFlag, numAttrs>(
-          numNodes, &weightsLf_ref, &weightsHf_ref, &attrsLf_ref, &attrsHf_ref);
-      } else {
-        // normal level reduction
-        numNodes = reduceLevel<haarFlag, numAttrs>(
-          level, numNodes, &weightsLf_ref, &weightsHf_ref, &attrsLf_ref, &attrsHf_ref);
-      }
-    }    
-  }
 
-  assert(weightsLf[0].weight == numPoints);
+  auto& rootNode = weightsLfStack.back()[0];
+  assert(rootNode.weight == numPoints);
 
   // reconstruction buffers
-  std::vector<int64_t> attrRec, attrRecParent;
+  std::vector<int32_t> attrRec, attrRecParent;
   attrRec.resize(numPoints * numAttrs);
   attrRecParent.resize(numPoints * numAttrs);
 
@@ -440,55 +490,39 @@ uraht_process_decoder(
   auto acCoeffQpLayer = -1;
 
   // descend tree
-  weightsLf.resize(1);
-  attrsLf.resize(numAttrs);
-
-  weightsLf_ref.resize(1);
-  attrsLf_ref.resize(numAttrs);
-
-  int sumNodes = 0;
+  bool sameNumNodes = 0;
   int8_t LcpCoeff = 0;
   int filterIdx = 0;
 
-  // ----------------------------------- descend tree, loop on level ------------------------------------
-  for (int level = levelHfPos.size() - 1, level_ref = levelHfPos_ref.size() - 1, isFirst = 1; level > 0; /*nop*/) {
-    int numNodes = weightsHf.size() - levelHfPos[level];
-    sumNodes += numNodes;
-    weightsLf.resize(weightsLf.size() + numNodes);
-    attrsLf.resize(attrsLf.size() + numNodes * numAttrs);
-    expandLevel_decoder(level, numNodes, &weightsLf, &weightsHf);
+  // ----------------------------------- descend tree, loop on depth ------------------------------------
+  for (int levelD = numDepth, levelD_ref = numDepth_ref, isFirst = 1; levelD > 0; /*nop*/) {
+    std::vector<UrahtNode>& weightsParent = weightsLfStack[levelD];
+    std::vector<UrahtNode>& weightsLf = weightsLfStack[levelD - 1];
 
-    weightsHf.resize(levelHfPos[level]);
-    attrsHf.resize(levelHfPos[level] * numAttrs);
+    sameNumNodes = (weightsLf.size() == weightsParent.size());
+    
+	levelD--;
+    int level = 3 * levelD;
 
-    if (level_ref <= 0) {
+    if (levelD_ref <= 0) {
       enableACInterPred = false;
     }
 
     if (treeDepth >= treeDepthLimit)
       enableACInterPred = false;
 
-    if (enableACInterPred) {
-      int numNodes_ref = weightsHf_ref.size() - levelHfPos_ref[level_ref];
-      weightsLf_ref.resize(weightsLf_ref.size() + numNodes_ref);
-      attrsLf_ref.resize(attrsLf_ref.size() + numNodes_ref * numAttrs);
+	std::vector<UrahtNode>& weightsLf_ref = enableACInterPred 
+      ? weightsLfStack_ref[levelD_ref - 1]  // to avoid copying and use reference
+      : weightsLfStack_ref[0]; // will not be used
 
-      expandLevel<haarFlag, numAttrs>(
-        level_ref, numNodes_ref, &weightsLf_ref, &weightsHf_ref, &attrsLf_ref, &attrsHf_ref);
+    int level_ref = 0;
+    if (enableACInterPred) {     
+      levelD_ref--;
+      level_ref = 3 * levelD_ref;
+    }    
 
-      weightsHf_ref.resize(levelHfPos_ref[level_ref]);
-      attrsHf_ref.resize(levelHfPos_ref[level_ref] * numAttrs);
-    }
-
-    // expansion of level is complete, processing is now on the next level
-    level--;
-    level_ref--;
-
-    // every three levels, perform transform
-    if (level % 3)
-      continue;
     //if current level nodes number is equal to previous nodes level, skip current level
-    if (sumNodes == 0)
+    if (sameNumNodes)
       continue;
 
     // initial scan position of the coefficient buffer
@@ -531,23 +565,12 @@ uraht_process_decoder(
     LcpCoeff = 0;
     PCCRAHTComputeLCP curlevelLcp;
 
-	//--------------- calculate parent node information for current level ------------ 
+	//--------------- initialize parent node information for current level ------------
     if (enablePredictionInLvl) {
       for (auto& ele : weightsParent)
         ele.occupancy = 0;
-
-      const int parentCount = weightsParent.size();
-      auto it = weightsLf.begin();
-      for (auto i = 0; i < parentCount; i++) {
-        weightsParent[i].firstChild = it++;
-
-        while (it != weightsLf.end()
-               && !((it->pos ^ weightsParent[i].pos) >> (level + 3)))
-          it++;
-        weightsParent[i].lastChild = it;
-      }
     }   
-    
+      
     //--------------- select quantiser according to transform layer ------------
     qpLayer = std::min(qpLayer + 1, int(qpset.layers.size()) - 1);
     acCoeffQpLayer++;
@@ -559,7 +582,6 @@ uraht_process_decoder(
     std::swap(numParentNeigh, numGrandParentNeigh);
     auto attrRecParentUsIt = attrRecParentUs.cbegin();
     auto attrRecParentIt = attrRecParent.cbegin();
-    auto weightsParentIt = weightsParent.begin();
     auto numGrandParentNeighIt = numGrandParentNeigh.cbegin();
     
 	//---------------- get inter filter of current level ---------------------
@@ -594,8 +616,10 @@ uraht_process_decoder(
       interFilterTap = 128 - recResidueFilterTap;
     }
 
-	// ----------------------------- loop on nodes of current level -----------------------------------
-    for (int i = 0, j = 0, iLast, jLast, iEnd = weightsLf.size(), jEnd = weightsLf_ref.size(); i < iEnd; i = iLast) {
+    // ----------------------------- loop on nodes of current level -----------------------------------
+	int i = 0;
+    int j = 0, jLast = 0, jEnd = weightsLf_ref.size();
+	for (auto weightsParentIt = weightsParent.begin(); weightsParentIt < weightsParent.end(); /*nop*/){
       FixedPoint SampleBuf[6][8] = {0}, transformBuf[6][8] = {0};
       FixedPoint (*SamplePredBuf)[8] = &SampleBuf[numAttrs], (*transformPredBuf)[8] = &transformBuf[numAttrs];
       FixedPoint SampleInterPredBuf[3][8] = {0}, transformInterPredBuf[3][8] = {0};
@@ -606,23 +630,48 @@ uraht_process_decoder(
 	  // For Lcp prediction
 	  int64_t CoeffRecBuf[8][3] = {0};     
       FixedPoint transformResidueRecBuf[3] = {0};
+	  int nodelvlSum = 0;
 
+	  // ---- now compute information of current node ----
       int weights[8 + 8 + 8 + 8] = {};
-      uint64_t sumWeights_ref = 0, sumWeights_cur = 0; 
-	  FixedPoint finterDC[3] = {0}, interParentMean[3] = {0};
-      uint8_t occupancy = 0;
-      int nodelvlSum = 0;
-      Qps nodeQp[8] = {};
-      // generate weights, occupancy mask, and fwd transform buffers
-      // for all siblings of the current node.
-      int nodeCnt = 0;
+	  uint64_t sumWeights_cur = 0;
+	  Qps nodeQp[8] = {};
+	  uint8_t occupancy = 0;
+	  int nodeCnt = 0;
+	  int nodeCnt_real = 0;
 
+	  for (auto it = weightsParentIt->firstChild; it != weightsParentIt->lastChild; it++) {
+        int nodeIdx = (it->pos >> level) & 0x7;
+        weights[nodeIdx] = it->weight;
+        sumWeights_cur += (uint64_t) weights[nodeIdx];
+        nodeQp[nodeIdx][0] = it->qp[0] >> regionQpShift;
+        nodeQp[nodeIdx][1] = it->qp[1] >> regionQpShift;
+
+        occupancy |= 1 << nodeIdx;        
+        nodeCnt_real++;
+
+		if (rahtExtension)
+		  nodeCnt++;
+      }
+
+      if (!inheritDc) {
+        for (int j = i, nodeIdx = 0; nodeIdx < 8; nodeIdx++) {
+          if (!weights[nodeIdx])
+            continue;
+          numParentNeigh[j++] = 19;
+        }
+      }     
+
+	  // --- now compute inter reference node information ---
       int weights_ref[8 + 8 + 8 + 8] = {};
-      bool interNode = false;
+	  uint64_t sumWeights_ref = 0;
+      FixedPoint finterDC[3] = {0}, interParentMean[3] = {0};
 
-      bool checkInterNode = enableACInterPred;
+      bool interNode = false;
+      bool testInterNode = !(rahtExtension && nodeCnt == 1);
+      bool checkInterNode = enableACInterPred && testInterNode;
       if(enableACRDOInterPred)
-        checkInterNode = curLevelEnableACInterPred;
+        checkInterNode = curLevelEnableACInterPred && testInterNode;
 
       if (checkInterNode) {
         const auto cur_pos = weightsLf[i].pos >> (level + 3);
@@ -639,18 +688,18 @@ uraht_process_decoder(
       if (interNode) {
         for (jLast = j; jLast < jEnd; jLast++) {
           int nextNode = jLast > j
-          && !isSibling(weightsLf_ref[jLast].pos, weightsLf_ref[j].pos, level_ref + 3);
+            && !isSibling(weightsLf_ref[jLast].pos, weightsLf_ref[j].pos, level_ref + 3);
           if (nextNode)
             break;
           int nodeIdx = (weightsLf_ref[jLast].pos >> level_ref) & 0x7;
           weights_ref[nodeIdx] = weightsLf_ref[jLast].weight;
           sumWeights_ref += (uint64_t) weights_ref[nodeIdx];
           for (int k = 0; k < numAttrs; k++){
-            SampleInterPredBuf[k][nodeIdx] = attrsLf_ref[jLast * numAttrs + k];
+            SampleInterPredBuf[k][nodeIdx] = weightsLf_ref[jLast].sumAttr[k];
             finterDC[k] += SampleInterPredBuf[k][nodeIdx];
           }
         }
-        
+
         if(haarFlag){
           mkWeightTree(weights_ref);
           std::copy_n(&SampleInterPredBuf[0][0], numAttrs * 8, &transformInterPredBuf[0][0]);
@@ -660,10 +709,11 @@ uraht_process_decoder(
             interParentMean[k].val = finterDC[k].val;
           }
         }
-        else{
+		else{
           FixedPoint rsqrtWeightSumRef(0);
-          int shiftBits = sumWeights_ref > 1024 ? ilog2(sumWeights_ref - 1) >> 1 : 0;
-          rsqrtWeightSumRef.val = irsqrt(sumWeights_ref) >> (40 - shiftBits - FixedPoint::kFracBits);
+          uint64_t w = sumWeights_ref;
+          int shiftBits = 5 * ((w > 1024) + (w > 1048576));
+          rsqrtWeightSumRef.val = fastIrsqrt(w) >> (40 - shiftBits - FixedPoint::kFracBits);
           for (int k = 0; k < numAttrs; k++) {
             finterDC[k].val >>= shiftBits;
             finterDC[k] *= rsqrtWeightSumRef;
@@ -672,10 +722,10 @@ uraht_process_decoder(
             interParentMean[k] *= rsqrtWeightSumRef;
           }
         }
-        
+
         int64_t curinheritDC = (inheritDc) ? *attrRecParentUsIt : 0;
         int64_t interDC = finterDC[0].val;
-        
+
         if ((curinheritDC > 0) && (interDC > 0) && (!haarFlag)) {
           bool condition1 = 10 * interDC < ((curinheritDC)* 5);
           bool condition2 = 10 * interDC > ((curinheritDC)* 20);
@@ -685,39 +735,8 @@ uraht_process_decoder(
         }
       }
 
-      for (iLast = i; iLast < iEnd; iLast++) {
-        int nextNode = iLast > i
-          && !isSibling(weightsLf[iLast].pos, weightsLf[i].pos, level + 3);
-        if (nextNode)
-          break;
 
-        int nodeIdx = (weightsLf[iLast].pos >> level) & 0x7;
-        weights[nodeIdx] = weightsLf[iLast].weight;
-        sumWeights_cur += (uint64_t) weights[nodeIdx];
-        nodeQp[nodeIdx][0] = weightsLf[iLast].qp[0] >> regionQpShift;
-        nodeQp[nodeIdx][1] = weightsLf[iLast].qp[1] >> regionQpShift;
-
-        occupancy |= 1 << nodeIdx;
-
-        if (rahtExtension)
-          nodeCnt++;
-
-      }
-
-      if (!inheritDc) {
-        for (int j = i, nodeIdx = 0; nodeIdx < 8; nodeIdx++) {
-          if (!weights[nodeIdx])
-            continue;
-          numParentNeigh[j++] = 19;
-        }
-      }
-
-      if (rahtExtension && nodeCnt == 1){
-        interNode = false;
-      }
-
-      mkWeightTree(weights);
-
+	  // --- now compute intra prediction information ---
       // Inter-level prediction:
       //  - Find the parent neighbours of the current node
       //  - Generate prediction for all attributes into transformPredBuf
@@ -785,17 +804,16 @@ uraht_process_decoder(
         }
       }
 
-      int parentWeight = 0;
-      if (inheritDc) {
-        parentWeight = weightsParentIt->weight;
-        weightsParentIt++;
+      if (inheritDc) {       
         numGrandParentNeighIt++;
       }
+      weightsParentIt++;
 
       bool enableIntraPrediction =
       curLevelEnableACInterPred && enablePrediction;
       bool enableInterPrediction = curLevelEnableACInterPred;
-      
+
+      // --- now resample the reference inter node according to the weights ---
       if(haarFlag){
         if(interNode){
           for (int childIdx = 0; childIdx < 8; childIdx++) {
@@ -833,8 +851,8 @@ uraht_process_decoder(
             if(weights_ref[childIdx]>1) {
               FixedPoint rsqrtWeight;
               uint64_t w = weights_ref[childIdx];
-              int shift = w > 1024 ? ilog2(w - 1) >> 1 : 0;
-              rsqrtWeight.val = irsqrt(w) >> (40 - shift - FixedPoint::kFracBits);
+              int shift = 5 * ((w > 1024) + (w > 1048576));
+              rsqrtWeight.val = fastIrsqrt(w) >> (40 - shift - FixedPoint::kFracBits);
               for (int k = 0; k < numAttrs; k++) {
                 SampleInterPredBuf[k][childIdx].val >>= shift;
                 SampleInterPredBuf[k][childIdx] *= rsqrtWeight; //sqrt normalized: DC
@@ -846,7 +864,8 @@ uraht_process_decoder(
           enablePrediction = true;
           std::copy_n(&SampleInterPredBuf[0][0], numAttrs * 8, &SamplePredBuf[0][0]);
         }
-        
+
+        // --- normalise coefficients in lossy case ---
         for (int childIdx = 0; childIdx < 8; childIdx++) {
           
           if (weights[childIdx] <= 1)
@@ -855,8 +874,7 @@ uraht_process_decoder(
           // Predicted attribute values
           FixedPoint sqrtWeight;
           if (enablePrediction) {
-            sqrtWeight.val =
-            isqrt(uint64_t(weights[childIdx]) << (2 * FixedPoint::kFracBits));
+            sqrtWeight.val = fastIsqrt(weights[childIdx]);
             for (int k = 0; k < numAttrs; k++) {
               SamplePredBuf[k][childIdx] *= sqrtWeight;
             }
@@ -866,6 +884,7 @@ uraht_process_decoder(
 
       // forward transform:
       //  - decoder: just transform prediction
+      mkWeightTree(weights);
       if (haarFlag) {
         if (enablePrediction){
           std::copy_n(&SamplePredBuf[0][0], numAttrs * 8, &transformPredBuf[0][0]);
@@ -890,7 +909,7 @@ uraht_process_decoder(
       //compute DC of the predictions: Done in the same way at the encoder and decoder to avoid drifting
       if(enablePrediction && !haarFlag){
         FixedPoint rsqrtweightsum;
-        rsqrtweightsum.val = irsqrt(sumWeights_cur);
+        rsqrtweightsum.val = fastIrsqrt(sumWeights_cur);
         for (int childIdx = 0; childIdx < 8; childIdx++) {
           if (weights[childIdx] == 0)
             continue;
@@ -899,7 +918,7 @@ uraht_process_decoder(
             normalizedsqrtweight.val = rsqrtweightsum.val >> (40 - FixedPoint::kFracBits);
           } else {
             FixedPoint sqrtWeight;
-            sqrtWeight.val = isqrt(uint64_t(weights[childIdx]) << (2 * FixedPoint::kFracBits));;
+            sqrtWeight.val = fastIsqrt(weights[childIdx]);
             normalizedsqrtweight.val = sqrtWeight.val * rsqrtweightsum.val >> 40;
           }
           normalizedSqrtBuf[childIdx] = normalizedsqrtweight;
@@ -1032,8 +1051,8 @@ uraht_process_decoder(
           if (weights[nodeIdx] > 1) {
             FixedPoint rsqrtWeight;
             uint64_t w = weights[nodeIdx];
-            int shift = w > 1024 ? ilog2(w - 1) >> 1 : 0;
-            rsqrtWeight.val = irsqrt(w) >> (40 - shift - FixedPoint::kFracBits);
+            int shift = 5 * ((w > 1024) + (w > 1048576));
+            rsqrtWeight.val = fastIrsqrt(w) >> (40 - shift - FixedPoint::kFracBits);
             for (int k = 0; k < numAttrs; k++) {
               NodeRecBuf[k][nodeIdx].val >>= shift;
               NodeRecBuf[k][nodeIdx] *= rsqrtWeight;
@@ -1047,23 +1066,25 @@ uraht_process_decoder(
             : NodeRecBuf[k][nodeIdx].round();
         }
         j++;
-      }
-      // increment reference buffer index if inter prediction is enabled
+      }      
+      i += nodeCnt_real;
     }//end loop on nodes of current level
 
-    sumNodes = 0;
-    // preserve current weights/positions for later search
-    weightsParent = weightsLf;
+    sameNumNodes = 0;
     // increment tree depth
     treeDepth++;
   }//end loop on level
 
   // -------------- process duplicate points at level 0 if exists --------------
-  if (numDupNodes) {
+  if (!flagNoDuplicate) {
     std::swap(attrRec, attrRecParent);
     auto attrRecParentIt = attrRecParent.cbegin();
+
+    std::vector<int64_t> attrsHf;
+    attrsHf.resize(weightsHf.size() * numAttrs);
     auto attrsHfIt = attrsHf.cbegin();
 
+	std::vector<UrahtNode>& weightsLf = weightsLfStack[0];
     for (int i = 0, out = 0, iEnd = weightsLf.size(); i < iEnd; i++) {
       int weight = weightsLf[i].weight;
       // unique points have weight = 1
@@ -1077,12 +1098,10 @@ uraht_process_decoder(
         weightsLf[i].qp[1] >> regionQpShift};
 
       // duplicates
-      FixedPoint attrSum[3];
       FixedPoint attrRecDc[3];
       FixedPoint sqrtWeight;
-      sqrtWeight.val = isqrt(uint64_t(weight) << (2 * FixedPoint::kFracBits));
+      sqrtWeight.val = fastIsqrt(weight);
 
-      int64_t sumCoeff = 0;
       for (int k = 0; k < numAttrs; k++) {
         if (rahtExtension)
           attrRecDc[k].val = *attrRecParentIt++;
@@ -1093,11 +1112,9 @@ uraht_process_decoder(
         }
       }
 
-      FixedPoint rsqrtWeight;
       for (int w = weight - 1; w > 0; w--) {
         RahtKernel kernel(w, 1);
         HaarKernel haarkernel(w, 1);
-        int shift = w > 1024 ? ilog2(uint32_t(w - 1)) >> 1 : 0;
 
         auto quantizers = qpset.quantizers(qpLayer, nodeQp);
         for (int k = 0; k < numAttrs; k++) {

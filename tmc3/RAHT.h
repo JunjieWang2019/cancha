@@ -181,9 +181,15 @@ struct UrahtNode {
   int weight;
   std::array<int16_t, 2> qp;
 
+  int64_t sumAttr[3];
   uint8_t occupancy;
   std::vector<UrahtNode>::iterator firstChild;
   std::vector<UrahtNode>::iterator lastChild;
+};
+
+struct HaarNode {
+  int64_t pos;
+  int32_t attr[3];
 };
 
 //============================================================================
@@ -359,11 +365,9 @@ public:
   RahtKernel(int weightLeft, int weightRight)
   {
     uint64_t w = weightLeft + weightRight;
-    uint64_t isqrtW = irsqrt(w);
-    _a.val =
-      (isqrt(uint64_t(weightLeft) << (2 * _a.kFracBits)) * isqrtW) >> 40;
-    _b.val =
-      (isqrt(uint64_t(weightRight) << (2 * _b.kFracBits)) * isqrtW) >> 40;
+    uint64_t isqrtW = fastIrsqrt(w);
+    _a.val = fastIsqrt(weightLeft) * isqrtW >> 40;
+    _b.val = fastIsqrt(weightRight) * isqrtW >> 40;
   }
 
   void fwdTransform(
@@ -606,16 +610,12 @@ template<bool haarFlag, int numAttrs>
 int reduceUnique(
   int numNodes,
   std::vector<UrahtNode>* weightsIn,
-  std::vector<UrahtNode>* weightsOut,
-  std::vector<int64_t>* attrsIn,
-  std::vector<int64_t>* attrsOut)
+  std::vector<UrahtNode>* weightsOut)
 {
   // process a single level of the tree
   int64_t posPrev = -1;
   auto weightsInWrIt = weightsIn->begin();
   auto weightsInRdIt = weightsIn->cbegin();
-  auto attrsInWrIt = attrsIn->begin();
-  auto attrsInRdIt = attrsIn->begin();
   for (int i = 0; i < numNodes; i++) {
     const auto& node = *weightsInRdIt++;
 
@@ -623,22 +623,22 @@ int reduceUnique(
     if (node.pos != posPrev) {
       posPrev = node.pos;
       *weightsInWrIt++ = node;
-      for (int k = 0; k < numAttrs; k++)
-        *attrsInWrIt++ = *attrsInRdIt++;
       continue;
     }
 
     // duplicate node
     (weightsInWrIt - 1)->weight += node.weight;
     weightsOut->push_back(node);
-    for (int k = 0; k < numAttrs; k++) {
-      if (haarFlag) {
-        attrsOut->push_back(*attrsInRdIt++ - *(attrsInWrIt - numAttrs + k));
-        *(attrsInWrIt - numAttrs + k) += attrsOut->back() >> 1;
-      } else {
-        *(attrsInWrIt - numAttrs + k) += *attrsInRdIt;
-        attrsOut->push_back(*attrsInRdIt++);
+    if (haarFlag) {
+      for (int k = 0; k < numAttrs; k++) {
+        auto temp = node.sumAttr[k] - (weightsInWrIt - 1)->sumAttr[k];
+        (weightsInWrIt - 1)->sumAttr[k] += temp >> 1;
+        weightsOut->back().sumAttr[k] = temp;
       }
+    } 
+	else {
+      for (int k = 0; k < numAttrs; k++)
+        (weightsInWrIt - 1)->sumAttr[k] += node.sumAttr[k];
     }
   }
 
@@ -695,6 +695,114 @@ int reduceLevel(
   return std::distance(weightsIn->begin(), weightsInWrIt);
 }
 
+template<bool haarFlag, int numAttrs>
+int reduceDepth(
+  int level,
+  int numNodes,
+  std::vector<UrahtNode>* weightsIn,
+  std::vector<UrahtNode>* weightsOut)
+{
+  int64_t posPrev = -1;
+  auto weightsInRdIt = weightsIn->begin();
+  auto it = weightsIn->begin();
+  for (int i = 0; i < weightsIn->size();) {
+    // this is a new node
+    UrahtNode last = weightsInRdIt[i];
+    posPrev = last.pos;
+    last.firstChild = it++;
+
+    // look for same node
+    int i2 = i + 1;
+    for (; i2 < weightsIn->size(); i2++, it++)
+      if ((posPrev ^ weightsInRdIt[i2].pos) >> level)
+        break;
+
+    // process same nodes
+    for (int j = i + 1; j < i2; j++) {
+      const auto node = weightsInRdIt[j];
+      last.weight += node.weight;
+      // TODO: fix local qp to be same in encoder and decoder
+      last.qp[0] = (last.qp[0] + node.qp[0]) >> 1;
+      last.qp[1] = (last.qp[1] + node.qp[1]) >> 1;
+
+      if (!haarFlag) {
+        for (int k = 0; k < numAttrs; k++)
+          last.sumAttr[k] += node.sumAttr[k];
+      }
+    }
+
+    //attribute processign for Haar per direction in the interval [i, i2]
+    if (haarFlag) {
+      HaarNode haarNode[4];
+      // first direction (at most 8 nodes)
+      int numNode = 0;
+      int64_t posPrevH = -1;
+      for (int j = i; j < i2; j++) {
+        const auto node = weightsInRdIt[j];
+        bool newPair = (posPrevH ^ node.pos) >> (level - 2) != 0;
+        posPrevH = node.pos;
+
+        if (newPair) {
+          haarNode[numNode].pos = node.pos;
+          for (int k = 0; k < numAttrs; k++) {
+            haarNode[numNode].attr[k] = node.sumAttr[k];
+          }
+          numNode++;
+        } else {
+          auto& lastH = haarNode[numNode - 1];
+          for (int k = 0; k < numAttrs; k++) {
+            auto temp = node.sumAttr[k] - lastH.attr[k];
+            lastH.attr[k] += temp >> 1;
+          }
+        }
+      }
+
+      // second direction (at most 4 nodes)
+      int numNode2 = 0;
+      posPrevH = -1;
+      for (int j = 0; j < numNode; j++) {
+        const auto node = haarNode[j];
+        bool newPair = (posPrevH ^ node.pos) >> (level - 1) != 0;
+        posPrevH = node.pos;
+
+        if (newPair) {
+          haarNode[numNode2].pos = node.pos;
+          for (int k = 0; k < numAttrs; k++) {
+            haarNode[numNode2].attr[k] = node.attr[k];
+          }
+          numNode2++;
+        } else {
+          auto& lastH = haarNode[numNode2 - 1];
+          for (int k = 0; k < numAttrs; k++) {
+            auto temp = node.attr[k] - lastH.attr[k];
+            lastH.attr[k] += temp >> 1;
+          }
+        }
+      }
+
+      // third direction (at most 2 nodes).
+      auto& lastH = haarNode[0];
+      for (int k = 0; k < numAttrs; k++) {
+        last.sumAttr[k] = lastH.attr[k];
+      }
+
+      if (numNode2 == 2) {
+        lastH = haarNode[1];
+        for (int k = 0; k < numAttrs; k++) {
+          auto temp = lastH.attr[k] - last.sumAttr[k];
+          last.sumAttr[k] += temp >> 1;
+        }
+      }
+    }  // end Haar attributes
+
+    last.lastChild = it;
+    weightsOut->push_back(last);
+    i = i2;
+  }
+
+  // number of nodes in next level
+  return weightsOut->size();
+}
 //============================================================================
 // Merge sum and difference values to form a tree.
 template<bool haarFlag, int numAttrs>
