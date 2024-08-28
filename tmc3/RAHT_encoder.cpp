@@ -482,8 +482,9 @@ estimate_layer_filter(
       }
 
       FixedPoint rsqrtWeightSumRef(0);
-      int shiftBits = sumWeights_ref > 1024 ? ilog2(sumWeights_ref - 1) >> 1 : 0;
-      rsqrtWeightSumRef.val = irsqrt(sumWeights_ref) >> (40 - shiftBits - FixedPoint::kFracBits);
+      uint64_t w = sumWeights_ref;
+      int shiftBits = 5 * ((w > 1024) + (w > 1048576));
+      rsqrtWeightSumRef.val = fastIrsqrt(w) >> (40 - shiftBits - FixedPoint::kFracBits);
       for (int k = 0; k < numAttrs; k++) {
         finterDC[k].val >>= shiftBits;
         finterDC[k] *= rsqrtWeightSumRef;
@@ -520,8 +521,8 @@ estimate_layer_filter(
         if(weights_ref[childIdx] > 1) {
           FixedPoint rsqrtWeight;
           uint64_t w = weights_ref[childIdx];
-          int shift = w > 1024 ? ilog2(w - 1) >> 1 : 0;
-          rsqrtWeight.val = irsqrt(w) >> (40 - shift - FixedPoint::kFracBits);
+          int shift = 5 * ((w > 1024) + (w > 1048576));
+          rsqrtWeight.val = fastIrsqrt(w) >> (40 - shift - FixedPoint::kFracBits);
           for (int k = 0; k < numAttrs; k++) {
             transformInterPredBuf[k][childIdx].val >>= shift;
             transformInterPredBuf[k][childIdx] *= rsqrtWeight;
@@ -531,8 +532,7 @@ estimate_layer_filter(
         }
         if(weights[childIdx] > 1){
           FixedPoint sqrtWeight;
-          sqrtWeight.val =
-            isqrt(uint64_t(weights[childIdx]) << (2 * FixedPoint::kFracBits));
+          sqrtWeight.val = fastIsqrt(weights[childIdx]);
           for (int k = 0; k < numAttrs; k++) {
             transformInterPredBuf[k][childIdx] *= sqrtWeight; //sum of attribute
           }
@@ -548,8 +548,8 @@ estimate_layer_filter(
       if (true) {
         FixedPoint rsqrtWeight;
         uint64_t w = weights[childIdx];
-        int shift = w > 1024 ? ilog2(w - 1) >> 1 : 0;
-        rsqrtWeight.val = irsqrt(w) >> (40 - shift - FixedPoint::kFracBits);
+        int shift = 5 * ((w > 1024) + (w > 1048576));
+        rsqrtWeight.val = fastIrsqrt(w) >> (40 - shift - FixedPoint::kFracBits);
         for (int k = 0; k < numAttrs; k++) {
           transformBuf[k][childIdx].val >>= shift;
           transformBuf[k][childIdx] *= rsqrtWeight;

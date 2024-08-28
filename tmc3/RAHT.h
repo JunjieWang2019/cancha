@@ -359,11 +359,9 @@ public:
   RahtKernel(int weightLeft, int weightRight)
   {
     uint64_t w = weightLeft + weightRight;
-    uint64_t isqrtW = irsqrt(w);
-    _a.val =
-      (isqrt(uint64_t(weightLeft) << (2 * _a.kFracBits)) * isqrtW) >> 40;
-    _b.val =
-      (isqrt(uint64_t(weightRight) << (2 * _b.kFracBits)) * isqrtW) >> 40;
+    uint64_t isqrtW = fastIrsqrt(w);
+    _a.val = fastIsqrt(weightLeft) * isqrtW >> 40;
+    _b.val = fastIsqrt(weightRight) * isqrtW >> 40;
   }
 
   void fwdTransform(
