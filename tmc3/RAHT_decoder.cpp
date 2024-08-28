@@ -288,7 +288,7 @@ intraDcPred_decoder(
 }
 
 //============================================================================
-// Core transform process (for encoder/decoder)
+// Core transform process (for decoder)
 template<bool haarFlag, int numAttrs, bool rahtExtension, class ModeCoder>
 void
 uraht_process_decoder(
@@ -606,84 +606,14 @@ uraht_process_decoder(
 	  // For Lcp prediction
 	  int64_t CoeffRecBuf[8][3] = {0};     
       FixedPoint transformResidueRecBuf[3] = {0};
+	  int nodelvlSum = 0;
 
+	  // ---- now compute information of current node ----
       int weights[8 + 8 + 8 + 8] = {};
-      uint64_t sumWeights_ref = 0, sumWeights_cur = 0; 
-	  FixedPoint finterDC[3] = {0}, interParentMean[3] = {0};
-      uint8_t occupancy = 0;
-      int nodelvlSum = 0;
-      Qps nodeQp[8] = {};
-      // generate weights, occupancy mask, and fwd transform buffers
-      // for all siblings of the current node.
-      int nodeCnt = 0;
-
-      int weights_ref[8 + 8 + 8 + 8] = {};
-      bool interNode = false;
-
-      bool checkInterNode = enableACInterPred;
-      if(enableACRDOInterPred)
-        checkInterNode = curLevelEnableACInterPred;
-
-      if (checkInterNode) {
-        const auto cur_pos = weightsLf[i].pos >> (level + 3);
-        auto ref_pos = weightsLf_ref[j].pos >> (level_ref + 3);
-        while ((j < weightsLf_ref.size() - 1) && (cur_pos > ref_pos)) {
-          j++;
-          ref_pos = weightsLf_ref[j].pos >> (level_ref + 3);
-        }
-        if (cur_pos == ref_pos) {
-          interNode = true;
-        }
-      }
-
-      if (interNode) {
-        for (jLast = j; jLast < jEnd; jLast++) {
-          int nextNode = jLast > j
-          && !isSibling(weightsLf_ref[jLast].pos, weightsLf_ref[j].pos, level_ref + 3);
-          if (nextNode)
-            break;
-          int nodeIdx = (weightsLf_ref[jLast].pos >> level_ref) & 0x7;
-          weights_ref[nodeIdx] = weightsLf_ref[jLast].weight;
-          sumWeights_ref += (uint64_t) weights_ref[nodeIdx];
-          for (int k = 0; k < numAttrs; k++){
-            SampleInterPredBuf[k][nodeIdx] = attrsLf_ref[jLast * numAttrs + k];
-            finterDC[k] += SampleInterPredBuf[k][nodeIdx];
-          }
-        }
-        
-        if(haarFlag){
-          mkWeightTree(weights_ref);
-          std::copy_n(&SampleInterPredBuf[0][0], numAttrs * 8, &transformInterPredBuf[0][0]);
-          ComputeDCfor222Block<HaarKernel>(numAttrs, transformInterPredBuf, weights_ref);
-          for (int k = 0; k < numAttrs; k++) {
-            finterDC[k].val = transformInterPredBuf[k][0].val;
-            interParentMean[k].val = finterDC[k].val;
-          }
-        }
-        else{
-          FixedPoint rsqrtWeightSumRef(0);
-          int shiftBits = sumWeights_ref > 1024 ? ilog2(sumWeights_ref - 1) >> 1 : 0;
-          rsqrtWeightSumRef.val = irsqrt(sumWeights_ref) >> (40 - shiftBits - FixedPoint::kFracBits);
-          for (int k = 0; k < numAttrs; k++) {
-            finterDC[k].val >>= shiftBits;
-            finterDC[k] *= rsqrtWeightSumRef;
-            interParentMean[k].val = finterDC[k].val;
-            interParentMean[k].val >>= shiftBits;
-            interParentMean[k] *= rsqrtWeightSumRef;
-          }
-        }
-        
-        int64_t curinheritDC = (inheritDc) ? *attrRecParentUsIt : 0;
-        int64_t interDC = finterDC[0].val;
-        
-        if ((curinheritDC > 0) && (interDC > 0) && (!haarFlag)) {
-          bool condition1 = 10 * interDC < ((curinheritDC)* 5);
-          bool condition2 = 10 * interDC > ((curinheritDC)* 20);
-          if (condition1 || condition2) {
-            interNode = false;
-          }
-        }
-      }
+	  uint64_t sumWeights_cur = 0;
+	  Qps nodeQp[8] = {};
+	  uint8_t occupancy = 0;
+	  int nodeCnt = 0;
 
       for (iLast = i; iLast < iEnd; iLast++) {
         int nextNode = iLast > i
@@ -701,7 +631,6 @@ uraht_process_decoder(
 
         if (rahtExtension)
           nodeCnt++;
-
       }
 
       if (!inheritDc) {
@@ -710,14 +639,82 @@ uraht_process_decoder(
             continue;
           numParentNeigh[j++] = 19;
         }
+      }     
+
+	  // --- now compute inter reference node information ---
+      int weights_ref[8 + 8 + 8 + 8] = {};
+	  uint64_t sumWeights_ref = 0;
+      FixedPoint finterDC[3] = {0}, interParentMean[3] = {0};
+
+      bool interNode = false;
+      bool testInterNode = !(rahtExtension && nodeCnt == 1);
+      bool checkInterNode = enableACInterPred && testInterNode;
+      if(enableACRDOInterPred)
+        checkInterNode = curLevelEnableACInterPred && testInterNode;
+
+      if (checkInterNode) {
+        const auto cur_pos = weightsLf[i].pos >> (level + 3);
+        auto ref_pos = weightsLf_ref[j].pos >> (level_ref + 3);
+        while ((j < weightsLf_ref.size() - 1) && (cur_pos > ref_pos)) {
+          j++;
+          ref_pos = weightsLf_ref[j].pos >> (level_ref + 3);
+        }
+        if (cur_pos == ref_pos) {
+          interNode = true;
+        }
       }
 
-      if (rahtExtension && nodeCnt == 1){
-        interNode = false;
+      if (interNode) {
+        for (jLast = j; jLast < jEnd; jLast++) {
+          int nextNode = jLast > j
+            && !isSibling(weightsLf_ref[jLast].pos, weightsLf_ref[j].pos, level_ref + 3);
+          if (nextNode)
+            break;
+          int nodeIdx = (weightsLf_ref[jLast].pos >> level_ref) & 0x7;
+          weights_ref[nodeIdx] = weightsLf_ref[jLast].weight;
+          sumWeights_ref += (uint64_t) weights_ref[nodeIdx];
+          for (int k = 0; k < numAttrs; k++){
+            SampleInterPredBuf[k][nodeIdx] = attrsLf_ref[jLast * numAttrs + k];
+            finterDC[k] += SampleInterPredBuf[k][nodeIdx];
+          }
+        }
+
+        if(haarFlag){
+          mkWeightTree(weights_ref);
+          std::copy_n(&SampleInterPredBuf[0][0], numAttrs * 8, &transformInterPredBuf[0][0]);
+          ComputeDCfor222Block<HaarKernel>(numAttrs, transformInterPredBuf, weights_ref);
+          for (int k = 0; k < numAttrs; k++) {
+            finterDC[k].val = transformInterPredBuf[k][0].val;
+            interParentMean[k].val = finterDC[k].val;
+          }
+        }
+		else{
+          FixedPoint rsqrtWeightSumRef(0);
+          int shiftBits = sumWeights_ref > 1024 ? ilog2(sumWeights_ref - 1) >> 1 : 0;
+          rsqrtWeightSumRef.val = irsqrt(sumWeights_ref) >> (40 - shiftBits - FixedPoint::kFracBits);
+          for (int k = 0; k < numAttrs; k++) {
+            finterDC[k].val >>= shiftBits;
+            finterDC[k] *= rsqrtWeightSumRef;
+            interParentMean[k].val = finterDC[k].val;
+            interParentMean[k].val >>= shiftBits;
+            interParentMean[k] *= rsqrtWeightSumRef;
+          }
+        }
+
+        int64_t curinheritDC = (inheritDc) ? *attrRecParentUsIt : 0;
+        int64_t interDC = finterDC[0].val;
+
+        if ((curinheritDC > 0) && (interDC > 0) && (!haarFlag)) {
+          bool condition1 = 10 * interDC < ((curinheritDC)* 5);
+          bool condition2 = 10 * interDC > ((curinheritDC)* 20);
+          if (condition1 || condition2) {
+            interNode = false;
+          }
+        }
       }
 
-      mkWeightTree(weights);
 
+	  // --- now compute intra prediction information ---
       // Inter-level prediction:
       //  - Find the parent neighbours of the current node
       //  - Generate prediction for all attributes into transformPredBuf
@@ -866,6 +863,7 @@ uraht_process_decoder(
 
       // forward transform:
       //  - decoder: just transform prediction
+      mkWeightTree(weights);
       if (haarFlag) {
         if (enablePrediction){
           std::copy_n(&SamplePredBuf[0][0], numAttrs * 8, &transformPredBuf[0][0]);
