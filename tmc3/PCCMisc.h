@@ -217,11 +217,13 @@ rotateRight(T val, int n)
 // Compute an approximation of \left\floor \sqrt{x} \right\floor
 
 uint32_t isqrt(uint64_t x) __attribute__((const));
+uint32_t fastIsqrt(uint64_t x) __attribute__((const));
 
 //---------------------------------------------------------------------------
 // Compute an approximation of reciprocal sqrt
 
 uint64_t irsqrt(uint64_t a64) __attribute__((const));
+uint64_t fastIrsqrt(int64_t a64) __attribute__((const));
 
 //---------------------------------------------------------------------------
 // Compute an approximation of atan2
@@ -244,15 +246,12 @@ morton3dAxisDec(int64_t val, int axis)
 inline uint64_t
 morton3dAdd(uint64_t a, uint64_t b)
 {
-  uint64_t mask = 0x9249249249249249llu;
-  uint64_t val = 0;
+  constexpr uint64_t mask1 = 0x9249249249249249llu;
+  constexpr uint64_t mask2 = mask1 << 1;
+  constexpr uint64_t mask3 = mask1 << 2;
 
-  for (int i = 0; i < 3; i++) {
-    val |= (a | ~mask) + (b & mask) & mask;
-    mask <<= 1;
-  }
-
-  return val;
+  return (a | ~mask1) + (b & mask1) & mask1
+    | (a | ~mask2) + (b & mask2) & mask2 | (a | ~mask3) + (b & mask3) & mask3;
 }
 
 //---------------------------------------------------------------------------

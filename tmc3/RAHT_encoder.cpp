@@ -1058,8 +1058,9 @@ uraht_process_encoder(
         } 
 		else{
           FixedPoint rsqrtWeightSumRef(0);
-          int shiftBits = sumWeights_ref > 1024 ? ilog2(sumWeights_ref - 1) >> 1 : 0;
-          rsqrtWeightSumRef.val = irsqrt(sumWeights_ref) >> (40 - shiftBits - FixedPoint::kFracBits);
+          uint64_t w = sumWeights_ref;
+          int shiftBits = 5 * ((w > 1024) + (w > 1048576));
+          rsqrtWeightSumRef.val = fastIrsqrt(w) >> (40 - shiftBits - FixedPoint::kFracBits);
           for (int k = 0; k < numAttrs; k++) {
             finterDC[k].val >>= shiftBits;
             finterDC[k] *= rsqrtWeightSumRef;
@@ -1188,8 +1189,8 @@ uraht_process_encoder(
             if(weights_ref[childIdx]>1) {
               FixedPoint rsqrtWeight;
               uint64_t w = weights_ref[childIdx];
-              int shift = w > 1024 ? ilog2(w - 1) >> 1 : 0;
-              rsqrtWeight.val = irsqrt(w) >> (40 - shift - FixedPoint::kFracBits);
+              int shift = 5 * ((w > 1024) + (w > 1048576));
+              rsqrtWeight.val = fastIrsqrt(w) >> (40 - shift - FixedPoint::kFracBits);
               for (int k = 0; k < numAttrs; k++) {
                 SampleInterPredBuf[k][childIdx].val >>= shift;
                 SampleInterPredBuf[k][childIdx] *= rsqrtWeight; //sqrt normalized: DC
@@ -1209,8 +1210,8 @@ uraht_process_encoder(
           // Summed attribute values
           FixedPoint rsqrtWeight;
           uint64_t w = weights[childIdx];
-          int shift = w > 1024 ? ilog2(w - 1) >> 1 : 0;
-          rsqrtWeight.val = irsqrt(w) >> (40 - shift - FixedPoint::kFracBits);
+          int shift = 5 * ((w > 1024) + (w > 1048576));
+          rsqrtWeight.val = fastIrsqrt(w) >> (40 - shift - FixedPoint::kFracBits);
           for (int k = 0; k < numAttrs; k++) {
             SampleBuf[k][childIdx].val >>= shift;
             SampleBuf[k][childIdx] *= rsqrtWeight;          
@@ -1219,8 +1220,7 @@ uraht_process_encoder(
           // Predicted attribute values
           FixedPoint sqrtWeight;
           if (enablePrediction) {
-            sqrtWeight.val =
-            isqrt(uint64_t(weights[childIdx]) << (2 * FixedPoint::kFracBits));
+            sqrtWeight.val = fastIsqrt(weights[childIdx]);
             for (int k = 0; k < numAttrs; k++) {
               SamplePredBuf[k][childIdx] *= sqrtWeight;
             }
@@ -1299,7 +1299,7 @@ uraht_process_encoder(
       //compute DC of the predictions: Done in the same way at the encoder and decoder to avoid drifting
       if((enablePrediction || enableIntraPrediction) && !haarFlag){
         FixedPoint rsqrtweightsum;
-        rsqrtweightsum.val = irsqrt(sumWeights_cur);
+        rsqrtweightsum.val = fastIrsqrt(sumWeights_cur);
         for (int childIdx = 0; childIdx < 8; childIdx++) {
           if (weights[childIdx] == 0)
             continue;
@@ -1308,7 +1308,7 @@ uraht_process_encoder(
             normalizedsqrtweight.val = rsqrtweightsum.val >> (40 - FixedPoint::kFracBits);
           } else {
             FixedPoint sqrtWeight;
-            sqrtWeight.val = isqrt(uint64_t(weights[childIdx]) << (2 * FixedPoint::kFracBits));;
+            sqrtWeight.val = fastIsqrt(weights[childIdx]);
             normalizedsqrtweight.val = sqrtWeight.val * rsqrtweightsum.val >> 40;
           }
           normalizedSqrtBuf[childIdx] = normalizedsqrtweight;
@@ -1816,8 +1816,8 @@ uraht_process_encoder(
           if (weights[nodeIdx] > 1) {
             FixedPoint rsqrtWeight;
             uint64_t w = weights[nodeIdx];
-            int shift = w > 1024 ? ilog2(w - 1) >> 1 : 0;
-            rsqrtWeight.val = irsqrt(w) >> (40 - shift - FixedPoint::kFracBits);
+            int shift = 5 * ((w > 1024) + (w > 1048576));
+            rsqrtWeight.val = fastIrsqrt(w) >> (40 - shift - FixedPoint::kFracBits);
             for (int k = 0; k < numAttrs; k++) {
               NodeRecBuf[k][nodeIdx].val >>= shift;
               NodeRecBuf[k][nodeIdx] *= rsqrtWeight;
@@ -1986,7 +1986,7 @@ uraht_process_encoder(
       FixedPoint attrSum[3];
       FixedPoint attrRecDc[3];
       FixedPoint sqrtWeight;
-      sqrtWeight.val = isqrt(uint64_t(weight) << (2 * FixedPoint::kFracBits));
+      sqrtWeight.val = fastIsqrt(weight);
 
       int64_t sumCoeff = 0;
       for (int k = 0; k < numAttrs; k++) {
@@ -2004,8 +2004,8 @@ uraht_process_encoder(
       for (int w = weight - 1; w > 0; w--) {
         RahtKernel kernel(w, 1);
         HaarKernel haarkernel(w, 1);
-        int shift = w > 1024 ? ilog2(uint32_t(w - 1)) >> 1 : 0;
-        rsqrtWeight.val = irsqrt(w) >> (40 - shift - FixedPoint::kFracBits);
+        int shift = 5 * ((w > 1024) + (w > 1048576));
+        rsqrtWeight.val = fastIrsqrt(w) >> (40 - shift - FixedPoint::kFracBits);
 
         auto quantizers = qpset.quantizers(qpLayer, nodeQp);
         for (int k = 0; k < numAttrs; k++) {
