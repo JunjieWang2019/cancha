@@ -419,7 +419,6 @@ uraht_process_decoder(
 
       weightsLf_ref->emplace_back(node_ref);
     }
-    weightsHf_ref.reserve(attrInterPredParams.paramsForInterRAHT.voxelCount);
   }
   
   // ascend tree
@@ -464,8 +463,7 @@ uraht_process_decoder(
   }
 
   auto& rootNode = weightsLfStack.back()[0];
-  if (!haarFlag)
-    assert(rootNode.weight == numPoints);
+  assert(rootNode.weight == numPoints);
 
   // reconstruction buffers
   std::vector<int32_t> attrRec, attrRecParent;
@@ -511,7 +509,7 @@ uraht_process_decoder(
       enableACInterPred = false;
 
 	int level_ref = 0;
-    std::vector<UrahtNode> weightsLf_ref;//这样的形式是不是与后边适配的 因为现在是指针
+    std::vector<UrahtNode> weightsLf_ref;
     if (enableACInterPred) {
       weightsLf_ref = weightsLfStack_ref[levelD_ref - 1];
       levelD_ref--;
@@ -1083,8 +1081,6 @@ uraht_process_decoder(
     }//end loop on nodes of current level
 
     sameNumNodes = 0;
-    // preserve current weights/positions for later search
-    weightsParent = weightsLf;
     // increment tree depth
     treeDepth++;
   }//end loop on level
