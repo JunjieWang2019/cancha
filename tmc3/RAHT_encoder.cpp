@@ -692,7 +692,7 @@ uraht_process_encoder(
     if (level == 0) {
       // process any duplicate points
       numNodes = reduceUnique<haarFlag, numAttrs>(
-        numNodes, &weightsLf, &weightsHf, &attrsLf, &attrsHf);
+        numNodes, &weightsLf, &weightsHf);
       numDupNodes -= numNodes;
     } else {
       // normal level reduction
@@ -707,7 +707,7 @@ uraht_process_encoder(
       if (level == 0) {
         // process any duplicate points
         numNodes = reduceUnique<haarFlag, numAttrs>(
-          numNodes, &weightsLf_ref, &weightsHf_ref, &attrsLf_ref, &attrsHf_ref);
+          numNodes, &weightsLf_ref, &weightsHf_ref);
       } else {
         // normal level reduction
         numNodes = reduceLevel<haarFlag, numAttrs>(
