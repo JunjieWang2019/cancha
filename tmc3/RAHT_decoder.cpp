@@ -419,7 +419,7 @@ uraht_process_decoder(
   assert(weightsLf[0].weight == numPoints);
 
   // reconstruction buffers
-  std::vector<int64_t> attrRec, attrRecParent;
+  std::vector<int32_t> attrRec, attrRecParent;
   attrRec.resize(numPoints * numAttrs);
   attrRecParent.resize(numPoints * numAttrs);
 
@@ -793,7 +793,8 @@ uraht_process_decoder(
       bool enableIntraPrediction =
       curLevelEnableACInterPred && enablePrediction;
       bool enableInterPrediction = curLevelEnableACInterPred;
-      
+
+      // --- now resample the reference inter node according to the weights ---
       if(haarFlag){
         if(interNode){
           for (int childIdx = 0; childIdx < 8; childIdx++) {
@@ -844,7 +845,8 @@ uraht_process_decoder(
           enablePrediction = true;
           std::copy_n(&SampleInterPredBuf[0][0], numAttrs * 8, &SamplePredBuf[0][0]);
         }
-        
+
+        // --- normalise coefficients in lossy case ---
         for (int childIdx = 0; childIdx < 8; childIdx++) {
           
           if (weights[childIdx] <= 1)

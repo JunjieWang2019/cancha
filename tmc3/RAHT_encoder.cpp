@@ -163,7 +163,7 @@ PCCRAHTACCoefficientEntropyEstimate::resStatUpdate(int32_t value, int k)
 //============================================================================
 // Generate the spatial prediction of a block.
 
-template<bool haarFlag, int numAttrs, bool rahtExtension, typename It>
+template<bool haarFlag, int numAttrs, bool rahtExtension, typename It, typename It2>
 void
 intraDcPred(
   const int parentNeighIdx[19],
@@ -171,7 +171,7 @@ intraDcPred(
   int occupancy,
   It first,
   It firstChild,
-  It intraFirstChild,
+  It2 intraFirstChild,
   FixedPoint predBuf[][8],
   FixedPoint intraPredBuf[][8],
   const RahtPredictionParams &rahtPredParams, 
@@ -719,7 +719,7 @@ uraht_process_encoder(
   assert(weightsLf[0].weight == numPoints);
 
   // reconstruction buffers
-  std::vector<int64_t> attrRec, attrRecParent, intraAttrRec, nonPredAttrRec;
+  std::vector<int32_t> attrRec, attrRecParent, intraAttrRec, nonPredAttrRec;
   attrRec.resize(numPoints * numAttrs);
   attrRecParent.resize(numPoints * numAttrs);
   if (enableACRDOInterPred)
@@ -1152,7 +1152,8 @@ uraht_process_encoder(
       curLevelEnableACInterPred && enablePrediction;
       bool enableInterPrediction = curLevelEnableACInterPred;
       
-      if(haarFlag){
+      // --- now resample the reference inter node according to the weights ---
+      if (haarFlag) {
         if(interNode){
           for (int childIdx = 0; childIdx < 8; childIdx++) {
             if(weights[childIdx] == 0){
@@ -1203,6 +1204,7 @@ uraht_process_encoder(
           std::copy_n(&SampleInterPredBuf[0][0], numAttrs * 8, &SamplePredBuf[0][0]);
         }
         
+        // --- normalise coefficients in lossy case ---
         for (int childIdx = 0; childIdx < 8; childIdx++) {
           
           if (weights[childIdx] <= 1)
@@ -1234,7 +1236,8 @@ uraht_process_encoder(
       }
 
       // forward transform:
-      //  - encoder: transform both attribute sums and prediction
+      //  - encoder: transform both attribute sums and prediction 
+      // TODO: sample domain prediction only transform the prediction residuals
       mkWeightTree(weights);
       if (haarFlag) {
         if (enablePrediction){
