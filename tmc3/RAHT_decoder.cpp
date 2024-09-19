@@ -115,14 +115,16 @@ reduceDepthDecoder(
   // process a single level of the tree
   int64_t posPrev = -1;
   auto weightsInRdIt = weightsIn->begin();
+  auto it = weightsIn->begin();
   for (int i = 0; i < weightsIn->size(); ) {
     // this is a new node
     auto last = weightsInRdIt[i];
     posPrev = last.pos;
+    last.firstChild = it++;
 
     // look for same node
     int i2 = i + 1;
-    for (; i2 < weightsIn->size(); i2++)
+    for (; i2 < weightsIn->size(); i2++,it++)
       if ((posPrev ^ weightsInRdIt[i2].pos) >> level)
         break;
 
@@ -135,6 +137,7 @@ reduceDepthDecoder(
       last.qp[1] = (last.qp[1] + node.qp[1]) >> 1;
     }
 
+    last.lastChild = it;
     weightsOut->push_back(last);
     i = i2;
   }
@@ -562,23 +565,12 @@ uraht_process_decoder(
     LcpCoeff = 0;
     PCCRAHTComputeLCP curlevelLcp;
 
-	//--------------- calculate parent node information for current level ------------ 
+	//--------------- initialize parent node information for current level ------------
     if (enablePredictionInLvl) {
       for (auto& ele : weightsParent)
         ele.occupancy = 0;
-
-      const int parentCount = weightsParent.size();
-      auto it = weightsLf.begin();
-      for (auto i = 0; i < parentCount; i++) {
-        weightsParent[i].firstChild = it++;
-
-        while (it != weightsLf.end()
-               && !((it->pos ^ weightsParent[i].pos) >> (level + 3)))
-          it++;
-        weightsParent[i].lastChild = it;
-      }
     }   
-    
+      
     //--------------- select quantiser according to transform layer ------------
     qpLayer = std::min(qpLayer + 1, int(qpset.layers.size()) - 1);
     acCoeffQpLayer++;
@@ -590,7 +582,6 @@ uraht_process_decoder(
     std::swap(numParentNeigh, numGrandParentNeigh);
     auto attrRecParentUsIt = attrRecParentUs.cbegin();
     auto attrRecParentIt = attrRecParent.cbegin();
-    auto weightsParentIt = weightsParent.begin();
     auto numGrandParentNeighIt = numGrandParentNeigh.cbegin();
     
 	//---------------- get inter filter of current level ---------------------
@@ -625,8 +616,10 @@ uraht_process_decoder(
       interFilterTap = 128 - recResidueFilterTap;
     }
 
-	// ----------------------------- loop on nodes of current level -----------------------------------
-    for (int i = 0, j = 0, iLast, jLast, iEnd = weightsLf.size(), jEnd = weightsLf_ref.size(); i < iEnd; i = iLast) {
+    // ----------------------------- loop on nodes of current level -----------------------------------
+	int i = 0;
+    int j = 0, jLast = 0, jEnd = weightsLf_ref.size();
+	for (auto weightsParentIt = weightsParent.begin(); weightsParentIt < weightsParent.end(); /*nop*/){
       FixedPoint SampleBuf[6][8] = {0}, transformBuf[6][8] = {0};
       FixedPoint (*SamplePredBuf)[8] = &SampleBuf[numAttrs], (*transformPredBuf)[8] = &transformBuf[numAttrs];
       FixedPoint SampleInterPredBuf[3][8] = {0}, transformInterPredBuf[3][8] = {0};
@@ -645,23 +638,20 @@ uraht_process_decoder(
 	  Qps nodeQp[8] = {};
 	  uint8_t occupancy = 0;
 	  int nodeCnt = 0;
+	  int nodeCnt_real = 0;
 
-      for (iLast = i; iLast < iEnd; iLast++) {
-        int nextNode = iLast > i
-          && !isSibling(weightsLf[iLast].pos, weightsLf[i].pos, level + 3);
-        if (nextNode)
-          break;
-
-        int nodeIdx = (weightsLf[iLast].pos >> level) & 0x7;
-        weights[nodeIdx] = weightsLf[iLast].weight;
+	  for (auto it = weightsParentIt->firstChild; it != weightsParentIt->lastChild; it++) {
+        int nodeIdx = (it->pos >> level) & 0x7;
+        weights[nodeIdx] = it->weight;
         sumWeights_cur += (uint64_t) weights[nodeIdx];
-        nodeQp[nodeIdx][0] = weightsLf[iLast].qp[0] >> regionQpShift;
-        nodeQp[nodeIdx][1] = weightsLf[iLast].qp[1] >> regionQpShift;
+        nodeQp[nodeIdx][0] = it->qp[0] >> regionQpShift;
+        nodeQp[nodeIdx][1] = it->qp[1] >> regionQpShift;
 
-        occupancy |= 1 << nodeIdx;
+        occupancy |= 1 << nodeIdx;        
+        nodeCnt_real++;
 
-        if (rahtExtension)
-          nodeCnt++;
+		if (rahtExtension)
+		  nodeCnt++;
       }
 
       if (!inheritDc) {
@@ -814,12 +804,10 @@ uraht_process_decoder(
         }
       }
 
-      int parentWeight = 0;
-      if (inheritDc) {
-        parentWeight = weightsParentIt->weight;
-        weightsParentIt++;
+      if (inheritDc) {       
         numGrandParentNeighIt++;
       }
+      weightsParentIt++;
 
       bool enableIntraPrediction =
       curLevelEnableACInterPred && enablePrediction;
@@ -1078,8 +1066,8 @@ uraht_process_decoder(
             : NodeRecBuf[k][nodeIdx].round();
         }
         j++;
-      }
-      // increment reference buffer index if inter prediction is enabled
+      }      
+      i += nodeCnt_real;
     }//end loop on nodes of current level
 
     sameNumNodes = 0;
