@@ -704,14 +704,16 @@ int reduceDepth(
 {
   int64_t posPrev = -1;
   auto weightsInRdIt = weightsIn->begin();
+  auto it = weightsIn->begin();
   for (int i = 0; i < weightsIn->size();) {
     // this is a new node
     UrahtNode last = weightsInRdIt[i];
     posPrev = last.pos;
+    last.firstChild = it++;
 
     // look for same node
     int i2 = i + 1;
-    for (; i2 < weightsIn->size(); i2++)
+    for (; i2 < weightsIn->size(); i2++, it++)
       if ((posPrev ^ weightsInRdIt[i2].pos) >> level)
         break;
 
@@ -793,6 +795,7 @@ int reduceDepth(
       }
     }  // end Haar attributes
 
+    last.lastChild = it;
     weightsOut->push_back(last);
     i = i2;
   }

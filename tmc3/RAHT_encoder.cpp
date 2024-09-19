@@ -876,21 +876,10 @@ uraht_process_encoder(
     PCCRAHTComputeLCP curlevelLcpIntra;
     PCCRAHTComputeLCP curlevelLcpNonPred;
 
-	//--------------- calculate parent node information for current level ------------ 
+	//--------------- initialize parent node information for current level ------------ 
     if (enablePredictionInLvl) {
       for (auto& ele : weightsParent)
         ele.occupancy = 0;
-
-      const int parentCount = weightsParent.size();
-      auto it = weightsLf.begin();
-      for (auto i = 0; i < parentCount; i++) {
-        weightsParent[i].firstChild = it++;
-
-        while (it != weightsLf.end()
-               && !((it->pos ^ weightsParent[i].pos) >> (level + 3)))
-          it++;
-        weightsParent[i].lastChild = it;
-      }
     }
     
     //--------------- select quantiser according to transform layer ------------ 
@@ -904,7 +893,6 @@ uraht_process_encoder(
     std::swap(numParentNeigh, numGrandParentNeigh);
     auto attrRecParentUsIt = attrRecParentUs.cbegin();
     auto attrRecParentIt = attrRecParent.cbegin();
-    auto weightsParentIt = weightsParent.begin();
     auto numGrandParentNeighIt = numGrandParentNeigh.cbegin();
     
 	//---------------- estimate inter filter of current level if enable---------------------
@@ -932,8 +920,9 @@ uraht_process_encoder(
     } //end filter estimation
 
 	// ----------------------------- loop on nodes of current level -----------------------------------
-    for (int i = 0, j = 0, iLast, jLast, iEnd = weightsLf.size(), jEnd = weightsLf_ref.size(); i < iEnd; i = iLast) {
-
+    int i = 0;
+    int j = 0, jLast = 0, jEnd = weightsLf_ref.size();
+	for (auto weightsParentIt = weightsParent.begin(); weightsParentIt < weightsParent.end(); /*nop*/){
       FixedPoint SampleBuf[6][8] = {0}, transformBuf[6][8] = {0};
       FixedPoint (*SamplePredBuf)[8] = &SampleBuf[numAttrs], (*transformPredBuf)[8] = &transformBuf[numAttrs];
       FixedPoint SampleInterPredBuf[3][8] = {0}, transformInterPredBuf[3][8] = {0};
@@ -966,26 +955,23 @@ uraht_process_encoder(
       Qps nodeQp[8] = {};
       uint8_t occupancy = 0;   
       int nodeCnt = 0;
+      int nodeCnt_real = 0;
 
-      for (iLast = i; iLast < iEnd; iLast++) {
-        int nextNode = iLast > i
-          && !isSibling(weightsLf[iLast].pos, weightsLf[i].pos, level + 3);
-        if (nextNode)
-          break;
-
-        int nodeIdx = (weightsLf[iLast].pos >> level) & 0x7;
-        weights[nodeIdx] = weightsLf[iLast].weight;
-        sumWeights_cur += (uint64_t) weights[nodeIdx];
-        nodeQp[nodeIdx][0] = weightsLf[iLast].qp[0] >> regionQpShift;
-        nodeQp[nodeIdx][1] = weightsLf[iLast].qp[1] >> regionQpShift;
+	  for (auto it = weightsParentIt->firstChild; it != weightsParentIt->lastChild; it++) {
+        int nodeIdx = (it->pos >> level) & 0x7;
+        weights[nodeIdx] = it->weight;
+        sumWeights_cur += (uint64_t)weights[nodeIdx];
+        nodeQp[nodeIdx][0] = it->qp[0] >> regionQpShift;
+        nodeQp[nodeIdx][1] = it->qp[1] >> regionQpShift;
 
         occupancy |= 1 << nodeIdx;
+        nodeCnt_real++;
 
         if (rahtExtension)
           nodeCnt++;
 
         for (int k = 0; k < numAttrs; k++)
-          SampleBuf[k][nodeIdx] = weightsLf[iLast].sumAttr[k];
+          SampleBuf[k][nodeIdx] = it->sumAttr[k];
       }
 
       if (!inheritDc) {
@@ -1128,12 +1114,10 @@ uraht_process_encoder(
         }
       }
 
-      int parentWeight = 0;
       if (inheritDc) {
-        parentWeight = weightsParentIt->weight;
-        weightsParentIt++;
         numGrandParentNeighIt++;
       }
+      weightsParentIt++;
 
       bool enableIntraPrediction =
       curLevelEnableACInterPred && enablePrediction;
@@ -1840,8 +1824,8 @@ uraht_process_encoder(
         }
         j++;
       }
-      // increment reference buffer index if inter prediction is enabled
-    }//end loop on nodes of current level
+      i += nodeCnt_real;
+  }  //end loop on nodes of current level
 
 
     if (enableRDOCodingLayer) {
