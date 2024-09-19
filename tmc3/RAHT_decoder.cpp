@@ -508,10 +508,12 @@ uraht_process_decoder(
     if (treeDepth >= treeDepthLimit)
       enableACInterPred = false;
 
-	int level_ref = 0;
-    std::vector<UrahtNode> weightsLf_ref;
-    if (enableACInterPred) {
-      weightsLf_ref = weightsLfStack_ref[levelD_ref - 1];
+	std::vector<UrahtNode>& weightsLf_ref = enableACInterPred 
+      ? weightsLfStack_ref[levelD_ref - 1]  // to avoid copying and use reference
+      : weightsLfStack_ref[0]; // will not be used
+
+    int level_ref = 0;
+    if (enableACInterPred) {     
       levelD_ref--;
       level_ref = 3 * levelD_ref;
     }    
