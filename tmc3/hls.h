@@ -469,6 +469,9 @@ struct RahtPredictionParams {
   bool raht_enable_intraPred_nonPred_code_layer;
   std::vector<int> raht_prediction_weights;
 
+  bool raht_cross_attribute_prediction_enabled_flag;
+  int raht_num_layer_CAP_enabled;
+
   std::vector<int> predWeightParent;
   std::vector<int> predWeightChild;
 
@@ -1000,6 +1003,7 @@ struct AttributeParameterSet {
   bool raht_send_inter_filters;
   int raht_inter_skip_layers;
   bool attr_ref_id_present_flag = false;
+  int num_layers_CAP_enabled_minus2;
 
   // not be coded
   bool layer_group_enabled_flag = false;

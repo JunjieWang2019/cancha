@@ -157,7 +157,8 @@ void regionAdaptiveHierarchicalTransform(
   int* coefficients,
   const bool removeRoundingOps,
   AttributeInterPredParams& attrInterPredParam,
-  ModeEncoder& encoder);
+  ModeEncoder& encoder,
+  int* attributes_another);
 
 void regionAdaptiveHierarchicalInverseTransform(
   const RahtPredictionParams &rahtPredParams,
@@ -170,7 +171,8 @@ void regionAdaptiveHierarchicalInverseTransform(
   int* coefficients,
   const bool removeRoundingOps,
   AttributeInterPredParams& attrInterPredParams,
-  ModeDecoder& decoder);
+  ModeDecoder& decoder,
+  int* attributes_another);
 
 namespace RAHT {
 
@@ -182,6 +184,7 @@ struct UrahtNode {
   std::array<int16_t, 2> qp;
 
   int64_t sumAttr[3];
+  int64_t sumAttr_another;
   uint8_t occupancy;
   std::vector<UrahtNode>::iterator firstChild;
   std::vector<UrahtNode>::iterator lastChild;
@@ -196,6 +199,7 @@ struct HaarNode {
 struct PCCRAHTComputeLCP {
 
   int8_t computeLCPCoeff(int m, int64_t coeffs[][3]);
+  int compute_Cross_Attr_Coeff(int m, int64_t coeffs[], int64_t coeffs_another[]);
 
 private:
   int64_t sumk1k2 = 0;
@@ -610,7 +614,8 @@ template<bool haarFlag, int numAttrs>
 int reduceUnique(
   int numNodes,
   std::vector<UrahtNode>* weightsIn,
-  std::vector<UrahtNode>* weightsOut)
+  std::vector<UrahtNode>* weightsOut,
+  bool enable_cross_attr = false)
 {
   // process a single level of the tree
   int64_t posPrev = -1;
@@ -637,8 +642,14 @@ int reduceUnique(
       }
     } 
 	else {
-      for (int k = 0; k < numAttrs; k++)
+      for (int k = 0; k < numAttrs; k++) {
         (weightsInWrIt - 1)->sumAttr[k] += node.sumAttr[k];
+      }
+
+	  if (enable_cross_attr) {
+        (weightsInWrIt - 1)->sumAttr_another += node.sumAttr_another;
+      }
+        
     }
   }
 
@@ -700,7 +711,8 @@ int reduceDepth(
   int level,
   int numNodes,
   std::vector<UrahtNode>* weightsIn,
-  std::vector<UrahtNode>* weightsOut)
+  std::vector<UrahtNode>* weightsOut,
+  bool enable_cross_attr = false)
 {
   int64_t posPrev = -1;
   auto weightsInRdIt = weightsIn->begin();
@@ -726,8 +738,13 @@ int reduceDepth(
       last.qp[1] = (last.qp[1] + node.qp[1]) >> 1;
 
       if (!haarFlag) {
-        for (int k = 0; k < numAttrs; k++)
+        for (int k = 0; k < numAttrs; k++) {
           last.sumAttr[k] += node.sumAttr[k];
+        }
+        if (enable_cross_attr) {
+          last.sumAttr_another += node.sumAttr_another;
+        }
+          
       }
     }
 

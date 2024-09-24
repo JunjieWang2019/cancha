@@ -777,6 +777,16 @@ AttributeDecoder::decodeReflectancesRaht(
   }
 
   std::vector<int> attributes(attribCount * voxelCount);
+  std::vector<int> attributes_another(voxelCount);
+
+  bool enable_cross_attribute_prediction = aps.rahtPredParams.raht_cross_attribute_prediction_enabled_flag;
+  if (enable_cross_attribute_prediction) {
+    for (int n = 0; n < voxelCount; n++) {
+      const auto color = pointCloud.getColor(packedVoxel[n].index);
+      attributes_another[n] = color[0];
+    }
+  }
+
   bool enableACRDOInterLayer = aps.raht_enable_code_layer && attrInterPredParams.enableAttrInterPred;
   bool enableACRDOIntraLayer = aps.rahtPredParams.raht_enable_intraPred_nonPred_code_layer && aps.rahtPredParams.raht_prediction_enabled_flag;
   bool enableRDOCodinglayer = enableACRDOInterLayer || enableACRDOIntraLayer;
@@ -817,7 +827,7 @@ AttributeDecoder::decodeReflectancesRaht(
   regionAdaptiveHierarchicalInverseTransform(
     aps.rahtPredParams, qpSet, pointQpOffsets.data(), mortonCode.data(),
     attributes.data(), attribCount, voxelCount, coefficients.data(),
-    aps.raht_extension, attrInterPredParams,predDecoder);
+    aps.raht_extension, attrInterPredParams,predDecoder, attributes_another.data());
   const int64_t maxReflectance = (1 << (int64_t)desc.bitdepth) - 1;
   const int64_t minReflectance = 0;
   for (int n = 0; n < voxelCount; n++) {
@@ -877,6 +887,16 @@ AttributeDecoder::decodeColorsRaht(
   }
 
   std::vector<int> attributes(attribCount * voxelCount);
+  std::vector<int> attributes_another(voxelCount);
+
+  bool enable_cross_attribute_prediction = aps.rahtPredParams.raht_cross_attribute_prediction_enabled_flag;
+  if (enable_cross_attribute_prediction) {
+    for (int n = 0; n < voxelCount; n++) {
+      const auto reflectance = pointCloud.getReflectance(packedVoxel[n].index);
+      attributes_another[n] = reflectance;
+    }
+  }
+
   bool enableACRDOInterLayer = aps.raht_enable_code_layer && attrInterPredParams.enableAttrInterPred;
   bool enableACRDOIntraLayer = aps.rahtPredParams.raht_enable_intraPred_nonPred_code_layer && aps.rahtPredParams.raht_prediction_enabled_flag;
   bool enableRDOCodinglayer = enableACRDOInterLayer || enableACRDOIntraLayer;
@@ -930,7 +950,7 @@ AttributeDecoder::decodeColorsRaht(
   regionAdaptiveHierarchicalInverseTransform(
     aps.rahtPredParams, qpSet, pointQpOffsets.data(), mortonCode.data(),
     attributes.data(), attribCount, voxelCount, coefficients.data(),
-    aps.raht_extension, attrInterPredParams,predDecoder);
+    aps.raht_extension, attrInterPredParams,predDecoder, attributes_another.data());
 
   int clipMax = (1 << desc.bitdepth) - 1;
   for (int n = 0; n < voxelCount; n++) {

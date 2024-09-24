@@ -1194,8 +1194,12 @@ write(const SequenceParameterSet& sps, const AttributeParameterSet& aps)
       bs.write(aps.cross_attr_prediction_enabled_this_type);
       if (aps.cross_attr_prediction_enabled_this_type)
         bs.writeUe(aps.refAttrIdx);
+	  if (aps.attr_encoding == AttributeEncoding::kRAHTransform
+        && !aps.rahtPredParams.integer_haar_enable_flag) {
+        if (aps.cross_attr_prediction_enabled_this_type && aps.refAttrIdx >= 0)
+          bs.writeUe(aps.num_layers_CAP_enabled_minus2);
+      }  
     }
-    
 	  if (sps.layer_group_enabled_flag)
 		  bs.write(aps.attr_ref_id_present_flag);
 
@@ -1377,10 +1381,16 @@ parseAps(const PayloadBuffer& buf, const SequenceParameterSet& sps)
     if (aps.attr_encoding == AttributeEncoding::kRAHTransform)
       bs.read(&aps.last_component_prediction_enabled_flag);
 
+	aps.num_layers_CAP_enabled_minus2 = -2;
     if (sps.cross_attr_prediction_enabled_flag) {
       bs.read(&aps.cross_attr_prediction_enabled_this_type);
       if (aps.cross_attr_prediction_enabled_this_type)
         bs.readUe(&aps.refAttrIdx);
+	  if (aps.attr_encoding == AttributeEncoding::kRAHTransform
+        && !aps.rahtPredParams.integer_haar_enable_flag) {
+        if (aps.cross_attr_prediction_enabled_this_type && aps.refAttrIdx >= 0)
+        bs.readUe(&aps.num_layers_CAP_enabled_minus2);
+      }
     }
     
 	  if (sps.layer_group_enabled_flag){

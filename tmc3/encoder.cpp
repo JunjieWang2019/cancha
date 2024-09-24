@@ -380,9 +380,18 @@ PCCTMC3Encoder3::compress(
   }
 
   for (auto& aps : params->aps)
-    if (aps.attr_encoding == AttributeEncoding::kRAHTransform)
+    if (aps.attr_encoding == AttributeEncoding::kRAHTransform) {
       aps.rahtPredParams.raht_last_component_prediction_enabled_flag =
         aps.last_component_prediction_enabled_flag;
+      aps.rahtPredParams.raht_cross_attribute_prediction_enabled_flag =
+        aps.cross_attr_prediction_enabled_this_type && aps.refAttrIdx > -1
+        && !aps.rahtPredParams.integer_haar_enable_flag;
+      if (aps.rahtPredParams.raht_cross_attribute_prediction_enabled_flag) {
+        aps.rahtPredParams.raht_num_layer_CAP_enabled =
+          aps.num_layers_CAP_enabled_minus2 + 2;
+      }
+    }
+
 
   // placeholder to "activate" the parameter sets
   _sps = &params->sps;

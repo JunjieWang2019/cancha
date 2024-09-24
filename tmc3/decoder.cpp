@@ -391,6 +391,15 @@ PCCTMC3Decoder3::decompress(
     auto aps = parseAps(*buf,*_sps);
     aps.rahtPredParams.raht_last_component_prediction_enabled_flag =
       aps.last_component_prediction_enabled_flag;
+
+    aps.rahtPredParams.raht_cross_attribute_prediction_enabled_flag =
+      aps.cross_attr_prediction_enabled_this_type && aps.refAttrIdx > -1
+      && !aps.rahtPredParams.integer_haar_enable_flag;
+    if (aps.rahtPredParams.raht_cross_attribute_prediction_enabled_flag) {
+      aps.rahtPredParams.raht_num_layer_CAP_enabled =
+        aps.num_layers_CAP_enabled_minus2 + 2;
+    }
+
     // HACK: assume that an SPS has been received prior to the APS.
     // This is not required, and parsing of the APS is independent of the SPS.
     // todo(df): move APS fixup to activation process

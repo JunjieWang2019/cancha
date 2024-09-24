@@ -1550,6 +1550,10 @@ ParseParameters(int argc, char* argv[], Parameters& params)
     params_attr.aps.raht_inter_skip_layers, 3,
     "skip initial layers for inter filtering in RAHT")
 
+  ("rahtNumLayersOfCrossAttributePredictionMinus2",
+    params_attr.aps.num_layers_CAP_enabled_minus2, 9,
+    "first (N + 2) layers CAP enabled")
+
   // This section is just dedicated to attribute recolouring (encoder only).
   // parameters are common to all attributes.
   (po::Section("Recolouring"))
@@ -1656,7 +1660,7 @@ ParseParameters(int argc, char* argv[], Parameters& params)
 	  params.encoder.depth1stSubgroupSearch, true, 
 	  "")
 
-      
+
   ("attributeContextReferenceIDPresentFlag",
 	  params.encoder.lgsp.attr_ctxt_ref_id_present_flag, false, 
 	  "")

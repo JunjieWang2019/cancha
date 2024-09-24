@@ -92,6 +92,49 @@ PCCRAHTComputeLCP::computeLCPCoeff(int m, int64_t coeffs[][3])
 
 }
 
+int
+PCCRAHTComputeLCP::compute_Cross_Attr_Coeff(int m, int64_t coeffs[], int64_t coeffs_another[])
+{
+  int64_t sumk1k22 = 0;
+  int64_t sumk1k11 = 0;
+  for (size_t coeffIdx = 0; coeffIdx < m; ++coeffIdx) {
+    auto& attr_cur = coeffs[coeffIdx];
+    auto& attr_ano = coeffs_another[coeffIdx];
+
+    sumk1k22 += attr_cur * attr_ano;
+    sumk1k11 += attr_ano * attr_ano;
+  }
+
+  if (window1.size() < 128) {
+    window1.push(sumk1k22);
+    window2.push(sumk1k11);
+    sumk1k2 += sumk1k22;
+    sumk1k1 += sumk1k11;
+  } else {
+    int removedValue1 = window1.front();
+    window1.pop();
+    int removedValue2 = window2.front();
+    window2.pop();
+    sumk1k2 -= removedValue1;
+    sumk1k1 -= removedValue2;
+
+    window1.push(sumk1k22);
+    window2.push(sumk1k11);
+
+    sumk1k2 += sumk1k22;
+    sumk1k1 += sumk1k11;
+  }
+
+  int scale = 0;
+  if (sumk1k2 && sumk1k1) {
+    scale = divApprox(sumk1k2, sumk1k1, 5);
+  }
+
+  // NB: coding range is limited to +-16
+  //return PCCClip(scale, -16, 16);
+  return scale;
+}
+
 //============================================================================
 
 struct PCCRAHTACCoefficientEntropyEstimate {
@@ -177,7 +220,11 @@ intraDcPred(
   const RahtPredictionParams &rahtPredParams, 
   int64_t& limitLow,
   int64_t& limitHigh,
-  const bool& enableACInterPred)
+  const bool& enableACInterPred,
+  It first_ano,
+  It firstChild_ano,
+  FixedPoint predBuf_ano[8],
+  bool enable_cross_attr)
 {
   static const uint8_t predMasks[19] = {255, 240, 204, 170, 192, 160, 136,
                                         3,   5,   15,  17,  51,  85,  10,
@@ -200,6 +247,9 @@ intraDcPred(
   int64_t neighValue[3];
   int64_t childNeighValue[3];
   int64_t intraChildNeighValue[3];
+
+  int64_t neighValue_ano;
+  int64_t childNeighValue_ano;
 
   const auto parentOnlyCheckMaxIdx =
     rahtPredParams.raht_subnode_prediction_enabled_flag ? 7 : 19;
@@ -229,6 +279,17 @@ intraDcPred(
       else
         neighValue[k] *= predWeightParent[i] << pcc::FixedPoint::kFracBits;
 
+	if (enable_cross_attr) {
+      auto neighValueIt_ano =
+        std::next(first_ano, parentNeighIdx[i]);
+        neighValue_ano = *neighValueIt_ano++;
+
+      if (rahtExtension)
+        neighValue_ano *= predWeightParent[i];
+      else
+        neighValue_ano *= predWeightParent[i] << pcc::FixedPoint::kFracBits;
+    }
+
     int mask = predMasks[i] & occupancy;
     for (int j = 0; mask; j++, mask >>= 1) {
       if (mask & 1) {
@@ -238,6 +299,8 @@ intraDcPred(
           if (enableACInterPred)
             intraPredBuf[k][j].val += neighValue[k];
         }
+        if (enable_cross_attr)
+          predBuf_ano[j].val += neighValue_ano;
       }
     }
   }
@@ -261,6 +324,18 @@ intraDcPred(
         else
           neighValue[k] *= predWeightParent[7 + i] << pcc::FixedPoint::kFracBits;
 
+	  if (enable_cross_attr) {
+        auto neighValueIt_ano =
+          std::next(first_ano, parentNeighIdx[7 + i]);
+       
+        neighValue_ano = *neighValueIt_ano++;
+       
+        if (rahtExtension)
+          neighValue_ano *= predWeightParent[7 + i];
+        else
+          neighValue_ano *= predWeightParent[7 + i] << pcc::FixedPoint::kFracBits;
+      }
+
       int mask = predMasks[7 + i] & occupancy;
       for (int j = 0; mask; j++, mask >>= 1) {
         if (mask & 1) {
@@ -278,6 +353,18 @@ intraDcPred(
 
             for (int k = 0; k < numAttrs; k++)
               predBuf[k][j].val += childNeighValue[k];
+
+			if (enable_cross_attr) {
+              auto childNeighValueIt_ano =
+                std::next(firstChild_ano, childNeighIdx[i][j]);
+             
+              if (rahtExtension)
+                childNeighValue_ano = (*childNeighValueIt_ano++) * predWeightChild[i];
+              else
+                childNeighValue_ano = (*childNeighValueIt_ano++) * (predWeightChild[i] << pcc::FixedPoint::kFracBits);
+              
+                predBuf_ano[j].val += childNeighValue_ano;
+            }
 
             if (enableACInterPred) {
               auto intraChildNeighValueIt =
@@ -299,6 +386,8 @@ intraDcPred(
               if (enableACInterPred)
                 intraPredBuf[k][j].val += neighValue[k];
             }
+            if (enable_cross_attr)
+              predBuf_ano[j].val += neighValue_ano;     
           }
         }
       }
@@ -315,6 +404,8 @@ intraDcPred(
         if (enableACInterPred)
           intraPredBuf[k][i] *= div;
       }
+      if (enable_cross_attr)
+        predBuf_ano[i] *= div;
       if (haarFlag) {
         for (int k = 0; k < numAttrs; k++) {
           predBuf[k][i].val = (predBuf[k][i].val >> predBuf[k][i].kFracBits)
@@ -592,7 +683,8 @@ uraht_process_encoder(
   int* attributes,
   int32_t* coeffBufIt,
   AttributeInterPredParams& attrInterPredParams,
-  ModeCoder& coder)
+  ModeCoder& coder,
+  int* attributes_another)
 {
   // coefficients are stored in three planar arrays.  coeffBufItK is a set
   // of iterators to each array.
@@ -613,6 +705,12 @@ uraht_process_encoder(
     }
     return;
   }
+
+  bool enable_Cross_attr = rahtPredParams.raht_cross_attribute_prediction_enabled_flag;
+
+  int depthLimitCrossAttr = 0;
+  if (enable_Cross_attr)
+    depthLimitCrossAttr = rahtPredParams.raht_num_layer_CAP_enabled;
 
   bool enableLCPPred = rahtPredParams.raht_last_component_prediction_enabled_flag;
 
@@ -656,6 +754,12 @@ uraht_process_encoder(
     weightsLf->emplace_back(node);
   }
 
+  if (enable_Cross_attr) {
+    for (int i = 0; i < numPoints; i++) {
+      weightsLf[0][i].sumAttr_another = attributes_another[i];
+    }
+  }
+
   std::vector<UrahtNode> weightsHf_ref;
   std::vector<std::vector<UrahtNode>> weightsLfStack_ref;
 
@@ -681,7 +785,7 @@ uraht_process_encoder(
   // ascend tree
   int numNodes = weightsLf->size();
   // process any duplicate points
-  numNodes = reduceUnique<haarFlag, numAttrs>(numNodes, weightsLf, &weightsHf);
+  numNodes = reduceUnique<haarFlag, numAttrs>(numNodes, weightsLf, &weightsHf, enable_Cross_attr);
   weightsLfStack[0].resize(numNodes);  //shrink
 
   const bool flagNoDuplicate = weightsHf.size() == 0;
@@ -694,7 +798,7 @@ uraht_process_encoder(
     weightsLf = &weightsLfStack.back();
 
     auto weightsLfRefold = &weightsLfStack[weightsLfStack.size() - 2];
-    numNodes = reduceDepth<haarFlag, numAttrs>(levelD, numNodes, weightsLfRefold, weightsLf);
+    numNodes = reduceDepth<haarFlag, numAttrs>(levelD, numNodes, weightsLfRefold, weightsLf, enable_Cross_attr);
     numDepth++;
   }
 
@@ -737,6 +841,12 @@ uraht_process_encoder(
   if (enableACRDONonPred)
     nonPredAttrRecUs.resize(numPoints * numAttrs);
 
+  std::vector<int32_t> attrRec_ano, attrRecParent_ano;
+  if (enable_Cross_attr) {
+    attrRec_ano.resize(numPoints);
+    attrRecParent_ano.resize(numPoints);
+  }
+
   std::vector<UrahtNode> weightsParent;
   weightsParent.reserve(numPoints);
 
@@ -770,6 +880,9 @@ uraht_process_encoder(
   int8_t nonPredLcpCoeff = 0;
   int8_t intraPredLcpCoeff = 0;
 
+  int Cross_Coeff = 0;
+  int Cross_Coeff_non_pred = 0;
+
   bool sameNumNodes = 0;
 
   double dlambda = 1.0;
@@ -785,6 +898,9 @@ uraht_process_encoder(
 
     levelD--;
     int level = 3 * levelD;
+
+	if (levelD < numDepth - depthLimitCrossAttr)
+      enable_Cross_attr = 0;
 
     if (levelD_ref <= 0) {
       enableACInterPred = false;
@@ -872,9 +988,16 @@ uraht_process_encoder(
     LcpCoeff = 0;
     nonPredLcpCoeff = 0;
     intraPredLcpCoeff = 0;
+
+	Cross_Coeff = 0;
+    Cross_Coeff_non_pred = 0;
+
     PCCRAHTComputeLCP curlevelLcp;
     PCCRAHTComputeLCP curlevelLcpIntra;
     PCCRAHTComputeLCP curlevelLcpNonPred;
+
+	PCCRAHTComputeLCP curlevelLcp_Cross;
+    PCCRAHTComputeLCP curlevelLcp_Cross_nonPred;
 
 	//--------------- initialize parent node information for current level ------------ 
     if (enablePredictionInLvl) {
@@ -894,6 +1017,9 @@ uraht_process_encoder(
     auto attrRecParentUsIt = attrRecParentUs.cbegin();
     auto attrRecParentIt = attrRecParent.cbegin();
     auto numGrandParentNeighIt = numGrandParentNeigh.cbegin();
+
+	if (enable_Cross_attr)
+      std::swap(attrRec_ano, attrRecParent_ano);
     
 	//---------------- estimate inter filter of current level if enable---------------------
     int64_t interFilterTap = 128;
@@ -930,6 +1056,12 @@ uraht_process_encoder(
       FixedPoint NodeRecBuf[3][8] = {0};
       FixedPoint normalizedSqrtBuf[8] = {0};
 
+	  FixedPoint Sample_Another_PredBuf[8] = {0};
+	  FixedPoint Sample_Another_Intra_PredBuf[8] = {0};
+	  FixedPoint Sample_Another_Resi_PredBuf[8] = {0};
+
+	  FixedPoint Sample_Another_Resi_PredBuf_temp[8] = {0};
+
       // For intra layer prediction
       FixedPoint SampleIntraPredBuf[3][8] = {0}, transformIntraPredBuf[3][8] = {0};
       FixedPoint transformIntraBuf[3][8] = {0};
@@ -939,6 +1071,16 @@ uraht_process_encoder(
       // For Non pred layer prediction
       FixedPoint transformNonPredBuf[3][8] = {0};
       FixedPoint NodeNonPredRecBuf[3][8] = {0};
+
+	  FixedPoint Sample_Another_NonPredBuf[8] = {0};
+      FixedPoint transform_Another_NonPredBuf[8] = {0};
+      FixedPoint PredDC_cross_nonPred = {0};
+ 
+	  int64_t attrUsRecBuf_cross[8] = {0};
+      int64_t attrUsRecBuf_cross_another[8] = {0};
+
+      int64_t nonPredAttrUsRecBuf_cross[8] = {0};
+      int64_t nonPredAttrUsRecBuf_cross_another[8] = {0};
 
 	  // For Lcp prediction
 	  int64_t CoeffRecBuf[8][3] = {0};
@@ -970,8 +1112,11 @@ uraht_process_encoder(
         if (rahtExtension)
           nodeCnt++;
 
-        for (int k = 0; k < numAttrs; k++)
-          SampleBuf[k][nodeIdx] = it->sumAttr[k];
+        for (int k = 0; k < numAttrs; k++) {
+          SampleBuf[k][nodeIdx] = it->sumAttr[k];       
+        }      
+        if (enable_Cross_attr)
+          Sample_Another_PredBuf[nodeIdx] = it->sumAttr_another;           
       }
 
       if (!inheritDc) {
@@ -1103,8 +1248,8 @@ uraht_process_encoder(
           intraDcPred<haarFlag, numAttrs, rahtExtension>(
             parentNeighIdx, childNeighIdx, occupancy,
             attrRecParent.begin(), attrRec.begin(), intraAttrRec.begin(),
-            SamplePredBuf, SampleIntraPredBuf, rahtPredParams,
-            limitLow, limitHigh, curLevelEnableACInterPred);
+            SamplePredBuf, SampleIntraPredBuf, rahtPredParams, limitLow, limitHigh, curLevelEnableACInterPred, 
+			attrRecParent_ano.begin(), attrRec_ano.begin(), Sample_Another_Intra_PredBuf, enable_Cross_attr);
         }
 
         for (int j = i, nodeIdx = 0; nodeIdx < 8; nodeIdx++) {
@@ -1187,7 +1332,11 @@ uraht_process_encoder(
           rsqrtWeight.val = fastIrsqrt(w) >> (40 - shift - FixedPoint::kFracBits);
           for (int k = 0; k < numAttrs; k++) {
             SampleBuf[k][childIdx].val >>= shift;
-            SampleBuf[k][childIdx] *= rsqrtWeight;          
+            SampleBuf[k][childIdx] *= rsqrtWeight;
+          }
+          if (enable_Cross_attr) {
+            Sample_Another_PredBuf[childIdx].val >>= shift;
+            Sample_Another_PredBuf[childIdx] *= rsqrtWeight;
           }
           
           // Predicted attribute values
@@ -1197,12 +1346,28 @@ uraht_process_encoder(
             for (int k = 0; k < numAttrs; k++) {
               SamplePredBuf[k][childIdx] *= sqrtWeight;
             }
+			if (enable_Cross_attr) {
+              Sample_Another_Intra_PredBuf[childIdx] *= sqrtWeight;
+            }
           }
           if (enableIntraPrediction) {
             for (int k = 0; k < numAttrs; k++) {
               SampleIntraPredBuf[k][childIdx] *= sqrtWeight;
             }
           }
+        }
+      }
+
+	  bool enable_Cross_attr_strict = enable_Cross_attr && inheritDc && nodeCnt_real > 1;
+
+	  if (enable_Cross_attr_strict) {         
+		for (int idx = 0; idx < 8; idx++) {
+          if (!weights[idx])
+            continue;
+		  Sample_Another_Resi_PredBuf_temp[idx].val = Sample_Another_PredBuf[idx].val - Sample_Another_Intra_PredBuf[idx].val;
+          Sample_Another_Resi_PredBuf[idx].val = Sample_Another_Resi_PredBuf_temp[idx].val * Cross_Coeff >> 5;
+
+	      SamplePredBuf[0][idx].val += Sample_Another_Resi_PredBuf[idx].val;
         }
       }
 
@@ -1226,7 +1391,7 @@ uraht_process_encoder(
         }        
       }
       else {
-        if (enablePrediction){
+        if (enablePrediction || enable_Cross_attr_strict) {
           std::copy_n(&SampleBuf[0][0], 2 * numAttrs * 8, &transformBuf[0][0]);
           fwdTransformBlock222<RahtKernel>(2 * numAttrs, transformBuf, weights);
         }
@@ -1266,12 +1431,24 @@ uraht_process_encoder(
       }
       if (curLevelEnableACIntraPred)
       {
-        std::copy_n(&transformBuf[0][0], 8 * numAttrs, &origsamples[0][0]);
-        std::copy_n(&transformBuf[0][0], 8 * numAttrs, &transformNonPredBuf[0][0]);
+        if (enable_Cross_attr_strict) {
+          for (int idx = 0; idx < 8; idx++) {
+            if (!weights[idx])
+              continue;
+
+            Sample_Another_NonPredBuf[idx].val = (Sample_Another_PredBuf[idx].val * Cross_Coeff_non_pred) >> 5;
+          }
+          std::copy_n(&Sample_Another_NonPredBuf[0], 8 , &transform_Another_NonPredBuf[0]);
+          fwdTransformBlock222<RahtKernel>(1, &transform_Another_NonPredBuf, weights);
+		} 
+
+         std::copy_n(&transformBuf[0][0], 8 * numAttrs, &origsamples[0][0]);
+         std::copy_n(&transformBuf[0][0], 8 * numAttrs, &transformNonPredBuf[0][0]);
+
       }
         
       //compute DC of the predictions: Done in the same way at the encoder and decoder to avoid drifting
-      if((enablePrediction || enableIntraPrediction) && !haarFlag){
+      if((enablePrediction || enableIntraPrediction || enable_Cross_attr_strict) && !haarFlag){
         FixedPoint rsqrtweightsum;
         rsqrtweightsum.val = fastIrsqrt(sumWeights_cur);
         for (int childIdx = 0; childIdx < 8; childIdx++) {
@@ -1294,14 +1471,20 @@ uraht_process_encoder(
               prod.val = normalizedsqrtweight.val; prod *= SampleIntraPredBuf[k][childIdx];
               PredAllIntraDC[k].val += prod.val;
 			}
-          }
+            if (enable_Cross_attr_strict && k == 0 && curLevelEnableACIntraPred) {
+                prod.val = normalizedsqrtweight.val;
+                prod *= Sample_Another_NonPredBuf[childIdx];
+                PredDC_cross_nonPred.val += prod.val;
+            }
+          }       
         }
       }
       
       //flags for skiptransform
-      bool skipTransform = enablePrediction;
+      bool skipTransform = enablePrediction || enable_Cross_attr_strict;
 	  bool skipAllIntraTransform = enableIntraPrediction;
-      
+	  bool skipNonPredTransform = enable_Cross_attr_strict;    
+
       // per-coefficient operations:
       //  - subtract transform domain prediction (encoder)
       //  - subtract the prediction between chroma channel components
@@ -1312,11 +1495,16 @@ uraht_process_encoder(
         if (inheritDc && !idx)
           return;
 
-        if (enablePrediction) {
+        if (enablePrediction || enable_Cross_attr_strict) {
           // subtract transformed prediction (skipping DC)
           for (int k = 0; k < numAttrs; k++) {
             transformBuf[k][idx] -= transformPredBuf[k][idx];
           }
+        }
+
+        if (enable_Cross_attr_strict && curLevelEnableACIntraPred) {
+          transformNonPredBuf[0][idx] -= transform_Another_NonPredBuf[idx];
+
         }
 
         if (enableIntraPrediction) {
@@ -1546,7 +1734,7 @@ uraht_process_encoder(
           }
 		  else {
             reconCurCoeff = divExp2RoundHalfUp(q.scale(coeff), kFixedPointAttributeShift);
-            transformPredBuf[k][idx] += reconCurCoeff;
+			transformPredBuf[k][idx] += reconCurCoeff;
             NodeRecBuf[k][idx] = reconCurCoeff;
           }
           skipTransform = skipTransform && (NodeRecBuf[k][idx].val == 0);
@@ -1628,7 +1816,7 @@ uraht_process_encoder(
             }
 			else {
               reconNonPredCoeff = divExp2RoundHalfUp(q.scale(nonPredCoeff), kFixedPointAttributeShift);
-              transformNonPredBuf[k][idx] = reconNonPredCoeff;
+			  transformNonPredBuf[k][idx] = reconNonPredCoeff;
               NodeNonPredRecBuf[k][idx] = reconNonPredCoeff;
             }
 
@@ -1646,6 +1834,8 @@ uraht_process_encoder(
             iresidueNonPred = fNonPredResidue.round();
             int64_t idistnonPred = (iresidueNonPred) * (iresidueNonPred);
             distnonPred += (double)idistnonPred;
+
+            skipNonPredTransform = skipNonPredTransform && (NodeNonPredRecBuf[k][idx].val == 0);
           }
         }
         nodelvlSum++;
@@ -1678,7 +1868,7 @@ uraht_process_encoder(
           attrRecParentIt++;
           int64_t val = *attrRecParentUsIt++;
           if (rahtExtension){
-            NodeRecBuf[k][0].val = (haarFlag)? val: val - PredDC[k].val;
+              NodeRecBuf[k][0].val = (haarFlag)? val: val - PredDC[k].val;
           }
           else if (val > 0)
             transformPredBuf[k][0].val = val << (15 - 2);
@@ -1690,7 +1880,10 @@ uraht_process_encoder(
           }
           if (curLevelEnableACIntraPred) {
             ///< inherit the parent DC coefficients
-            NodeNonPredRecBuf[k][0].val = val;
+            if (enable_Cross_attr_strict && k == 0)
+              NodeNonPredRecBuf[0][0].val = val - PredDC_cross_nonPred.val;
+            else
+              NodeNonPredRecBuf[k][0].val = val;
           }
         }
       }
@@ -1743,10 +1936,30 @@ uraht_process_encoder(
           }  
         }
         if (curLevelEnableACIntraPred){
-          invTransformBlock222<RahtKernel>(numAttrs, NodeNonPredRecBuf, weights);
+          if (skipNonPredTransform) {
+            FixedPoint DCerror[3];
+            for (int k = 0; k < numAttrs; k++) {
+              DCerror[k] = NodeNonPredRecBuf[k][0];
+              NodeNonPredRecBuf[k][0].val = 0;
+            }
+            for (int cidx = 0; cidx < 8; cidx++) {
+              if (!weights[cidx])
+                continue;
+
+              for (int k = 0; k < numAttrs; k++) {
+                FixedPoint Correctionterm = normalizedSqrtBuf[cidx];
+                Correctionterm *= DCerror[k];
+                NodeNonPredRecBuf[k][cidx] = Correctionterm;
+              }
+            }
+          } else {
+            invTransformBlock222<RahtKernel>(
+              numAttrs, NodeNonPredRecBuf, weights);
+          } 
         }
       }
 
+	  int node_cross = 0;
       for (int j = i, nodeIdx = 0; nodeIdx < 8; nodeIdx++) {
         if (!weights[nodeIdx])
           continue;
@@ -1754,7 +1967,21 @@ uraht_process_encoder(
         for (int k = 0; k < numAttrs; k++)
           if (rahtExtension) {
             if(!haarFlag){
+              auto temp = NodeRecBuf[k][nodeIdx];
+              FixedPoint cur, ano;
               NodeRecBuf[k][nodeIdx].val += SamplePredBuf[k][nodeIdx].val;
+              if (enable_Cross_attr_strict && k == 0) {
+                if (enablePrediction) {
+                  cur.val = temp.val + Sample_Another_Resi_PredBuf[nodeIdx].val;
+                  attrUsRecBuf_cross[node_cross] = cur.round();
+                  ano.val = Sample_Another_Resi_PredBuf_temp[nodeIdx].val;
+                  attrUsRecBuf_cross_another[node_cross] = ano.round();
+                } 
+				else {
+				  attrUsRecBuf_cross[node_cross] = NodeRecBuf[0][nodeIdx].round();
+                  attrUsRecBuf_cross_another[node_cross] = Sample_Another_PredBuf[nodeIdx].round();
+                }
+              }
             }
             attrRecUs[j * numAttrs + k] = NodeRecBuf[k][nodeIdx].val;            
             if (curLevelEnableACInterPred) {
@@ -1765,6 +1992,12 @@ uraht_process_encoder(
               NodeAllIntraRecBuf[k][nodeIdx].val;
             }
             if (curLevelEnableACIntraPred) {
+
+              if (enable_Cross_attr_strict && k == 0) {
+				NodeNonPredRecBuf[0][nodeIdx].val += Sample_Another_NonPredBuf[nodeIdx].val;
+				nonPredAttrUsRecBuf_cross[node_cross] = NodeNonPredRecBuf[0][nodeIdx].round();
+				nonPredAttrUsRecBuf_cross_another[node_cross] = Sample_Another_PredBuf[nodeIdx].round();
+              }
               nonPredAttrRecUs[j * numAttrs + k] =
                 NodeNonPredRecBuf[k][nodeIdx].val;
             }
@@ -1804,6 +2037,10 @@ uraht_process_encoder(
                 NodeNonPredRecBuf[k][nodeIdx] *= rsqrtWeight;
               }
             }
+            if (enable_Cross_attr) {
+              Sample_Another_PredBuf[nodeIdx].val >>= shift;
+              Sample_Another_PredBuf[nodeIdx] *= rsqrtWeight;
+            }
           }
         }
 
@@ -1822,8 +2059,24 @@ uraht_process_encoder(
               : NodeNonPredRecBuf[k][nodeIdx].round();
           }
         }
+        if (enable_Cross_attr) {
+          attrRec_ano[j] = rahtExtension
+            ? Sample_Another_PredBuf[nodeIdx].val
+            : Sample_Another_PredBuf[nodeIdx].round();
+        }
         j++;
+        node_cross++;
       }
+
+      if (enable_Cross_attr_strict) {
+        Cross_Coeff = curlevelLcp_Cross.compute_Cross_Attr_Coeff(
+          node_cross, attrUsRecBuf_cross, attrUsRecBuf_cross_another);
+
+        if (enableACRDONonPred)
+          Cross_Coeff_non_pred = curlevelLcp_Cross_nonPred.compute_Cross_Attr_Coeff(
+              node_cross, nonPredAttrUsRecBuf_cross, nonPredAttrUsRecBuf_cross_another);
+      }
+
       i += nodeCnt_real;
   }  //end loop on nodes of current level
 
@@ -2098,7 +2351,8 @@ regionAdaptiveHierarchicalTransform(
   int* coefficients,
   const bool rahtExtension,
   AttributeInterPredParams& attrInterPredParams,
-  ModeEncoder& encoder)
+  ModeEncoder& encoder,
+  int* attributes_another)
 {
   switch (attribCount) {
   case 3:
@@ -2106,21 +2360,21 @@ regionAdaptiveHierarchicalTransform(
       if (rahtExtension)
         uraht_process_encoder<true, 3, true>(
           rahtPredParams, qpset, pointQpOffsets, voxelCount, mortonCode,
-          attributes, coefficients, attrInterPredParams, encoder);
+          attributes, coefficients, attrInterPredParams, encoder, attributes_another);
       else
         uraht_process_encoder<true, 3, false>(
           rahtPredParams, qpset, pointQpOffsets, voxelCount, mortonCode,
-          attributes, coefficients, attrInterPredParams, encoder);
+          attributes, coefficients, attrInterPredParams, encoder, attributes_another);
     } 
 	else {
       if (rahtExtension)
         uraht_process_encoder<false, 3, true>(
           rahtPredParams, qpset, pointQpOffsets, voxelCount, mortonCode,
-          attributes, coefficients, attrInterPredParams, encoder);
+          attributes, coefficients, attrInterPredParams, encoder, attributes_another);
       else
         uraht_process_encoder<false, 3, false>(
           rahtPredParams, qpset, pointQpOffsets, voxelCount, mortonCode,
-          attributes, coefficients, attrInterPredParams, encoder);
+          attributes, coefficients, attrInterPredParams, encoder, attributes_another);
     }
     break;
 
@@ -2129,21 +2383,21 @@ regionAdaptiveHierarchicalTransform(
       if (rahtExtension)
         uraht_process_encoder<true, 1, true>(
           rahtPredParams, qpset, pointQpOffsets, voxelCount, mortonCode,
-          attributes, coefficients, attrInterPredParams, encoder);
+          attributes, coefficients, attrInterPredParams, encoder, attributes_another);
       else
         uraht_process_encoder<true, 1, false>(
           rahtPredParams, qpset, pointQpOffsets, voxelCount, mortonCode,
-          attributes, coefficients, attrInterPredParams, encoder);
+          attributes, coefficients, attrInterPredParams, encoder, attributes_another);
 	}
     else {
 	  if (rahtExtension)
         uraht_process_encoder<false, 1, true>(
           rahtPredParams, qpset, pointQpOffsets, voxelCount, mortonCode,
-          attributes, coefficients, attrInterPredParams, encoder);
+          attributes, coefficients, attrInterPredParams, encoder, attributes_another);
       else
         uraht_process_encoder<false, 1, false>(
           rahtPredParams, qpset, pointQpOffsets, voxelCount, mortonCode,
-          attributes, coefficients, attrInterPredParams, encoder);
+          attributes, coefficients, attrInterPredParams, encoder, attributes_another);
 	}
     break;
   default: throw std::runtime_error("attribCount only support 1 or 3");
