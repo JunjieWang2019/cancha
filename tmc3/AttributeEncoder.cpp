@@ -1570,12 +1570,17 @@ AttributeEncoder::encodeReflectancesTransformRaht(
   std::vector<int> attributes(attribCount * voxelCount);
   std::vector<int> coefficients(attribCount * voxelCount);
 
+  std::vector<int> attributes_another(voxelCount);
+
   attrInterPredParams.paramsForInterRAHT.FilterTaps.clear();
 
   // Populate input arrays.
   for (int n = 0; n < voxelCount; n++) {
     const auto reflectance = pointCloud.getReflectance(packedVoxel[n].index);
     attributes[attribCount * n] = reflectance;
+
+    const auto color = pointCloud.getColor(packedVoxel[n].index);
+    attributes_another[n] = color[0];
   }
 
   bool enableACRDOInterLayer = aps.raht_enable_code_layer && attrInterPredParams.enableAttrInterPred;
@@ -1623,7 +1628,7 @@ AttributeEncoder::encodeReflectancesTransformRaht(
   regionAdaptiveHierarchicalTransform(
     aps.rahtPredParams, qpSet, pointQpOffsets.data(), mortonCode.data(),
     attributes.data(), attribCount, voxelCount, coefficients.data(),
-    aps.raht_extension, attrInterPredParams,predEncoder);
+    aps.raht_extension, attrInterPredParams, predEncoder, attributes_another.data());
 
   // Entropy encode.
   int zeroRun = 0;
@@ -1688,12 +1693,20 @@ AttributeEncoder::encodeColorsTransformRaht(
   std::vector<int> attributes(attribCount * voxelCount);
   std::vector<int> coefficients(attribCount * voxelCount);
 
+  std::vector<int> attributes_another(voxelCount);
+
   // Populate input arrays.
   for (int n = 0; n < voxelCount; n++) {
     const auto color = pointCloud.getColor(packedVoxel[n].index);
     attributes[attribCount * n] = color[0];
     attributes[attribCount * n + 1] = color[1];
     attributes[attribCount * n + 2] = color[2];
+
+	if (false) {
+      const auto reflectance = pointCloud.getReflectance(packedVoxel[n].index);
+      attributes_another[n] = reflectance;
+    }
+
   }
 
   bool enableACRDOInterLayer = aps.raht_enable_code_layer && attrInterPredParams.enableAttrInterPred;
@@ -1751,7 +1764,7 @@ AttributeEncoder::encodeColorsTransformRaht(
   regionAdaptiveHierarchicalTransform(
     aps.rahtPredParams, qpSet, pointQpOffsets.data(), mortonCode.data(),
     attributes.data(), attribCount, voxelCount, coefficients.data(),
-    aps.raht_extension, attrInterPredParams,predEncoder);
+    aps.raht_extension, attrInterPredParams, predEncoder, attributes_another.data());
 
   // Entropy encode.
   int values[attribCount];

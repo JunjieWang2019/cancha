@@ -157,7 +157,8 @@ void regionAdaptiveHierarchicalTransform(
   int* coefficients,
   const bool removeRoundingOps,
   AttributeInterPredParams& attrInterPredParam,
-  ModeEncoder& encoder);
+  ModeEncoder& encoder,
+  int* attributes_another);
 
 void regionAdaptiveHierarchicalInverseTransform(
   const RahtPredictionParams &rahtPredParams,
@@ -170,7 +171,8 @@ void regionAdaptiveHierarchicalInverseTransform(
   int* coefficients,
   const bool removeRoundingOps,
   AttributeInterPredParams& attrInterPredParams,
-  ModeDecoder& decoder);
+  ModeDecoder& decoder,
+  int* attributes_another);
 
 namespace RAHT {
 
@@ -182,6 +184,7 @@ struct UrahtNode {
   std::array<int16_t, 2> qp;
 
   int64_t sumAttr[3];
+  int64_t sumAttr_another[1];
   uint8_t occupancy;
   std::vector<UrahtNode>::iterator firstChild;
   std::vector<UrahtNode>::iterator lastChild;
@@ -196,6 +199,7 @@ struct HaarNode {
 struct PCCRAHTComputeLCP {
 
   int8_t computeLCPCoeff(int m, int64_t coeffs[][3]);
+  int8_t compute_Cross_Attr_Coeff(int m, int64_t coeffs[][3], int64_t coeffs_another[][3]);
 
 private:
   int64_t sumk1k2 = 0;
@@ -637,8 +641,13 @@ int reduceUnique(
       }
     } 
 	else {
-      for (int k = 0; k < numAttrs; k++)
+      for (int k = 0; k < numAttrs; k++) {
         (weightsInWrIt - 1)->sumAttr[k] += node.sumAttr[k];
+        if (numAttrs == 1) {
+          (weightsInWrIt - 1)->sumAttr_another[k] += node.sumAttr_another[k];
+		}
+      }
+        
     }
   }
 
@@ -726,8 +735,13 @@ int reduceDepth(
       last.qp[1] = (last.qp[1] + node.qp[1]) >> 1;
 
       if (!haarFlag) {
-        for (int k = 0; k < numAttrs; k++)
+        for (int k = 0; k < numAttrs; k++) {
           last.sumAttr[k] += node.sumAttr[k];
+          if (numAttrs == 1) {
+            last.sumAttr_another[k] += node.sumAttr_another[k];
+		  }
+        }
+          
       }
     }
 

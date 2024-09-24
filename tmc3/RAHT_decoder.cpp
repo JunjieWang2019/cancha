@@ -40,7 +40,7 @@ using namespace pcc::RAHT;
 namespace pcc {
 //============================================================================
 // remove any non-unique leaves from a level in the uraht tree
-
+template<bool haarFlag, int numAttrs>
 int
 reduceUnique_decoder(
   int numNodes,
@@ -64,6 +64,14 @@ reduceUnique_decoder(
     // duplicate node
     (weightsInWrIt - 1)->weight += node.weight;
     weightsOut->push_back(node);
+
+	if (!haarFlag) {
+      for (int k = 0; k < numAttrs; k++) {
+        if (numAttrs == 1) {
+          (weightsInWrIt - 1)->sumAttr_another[k] += node.sumAttr_another[k];
+        }
+      }  //只在非haar下做应该
+	}
   }
 
   // number of nodes in next level
@@ -105,6 +113,7 @@ reduceLevel_decoder(
   return std::distance(weightsIn->begin(), weightsInWrIt);
 }
 
+template<bool haarFlag, int numAttrs>
 int
 reduceDepthDecoder(
   int level,
@@ -135,6 +144,14 @@ reduceDepthDecoder(
       // TODO: fix local qp to be same in encoder and decoder
       last.qp[0] = (last.qp[0] + node.qp[0]) >> 1;
       last.qp[1] = (last.qp[1] + node.qp[1]) >> 1;
+
+      if (!haarFlag) {
+        for (int k = 0; k < numAttrs; k++) {
+          if (numAttrs == 1) {
+            last.sumAttr_another[k] += node.sumAttr_another[k];
+          }
+        }
+      }
     }
 
     last.lastChild = it;
@@ -200,7 +217,11 @@ intraDcPred_decoder(
   FixedPoint predBuf[][8],
   const RahtPredictionParams &rahtPredParams, 
   int64_t& limitLow,
-  int64_t& limitHigh)
+  int64_t& limitHigh,
+  It first_ano,
+  It firstChild_ano,
+  FixedPoint predBuf_ano[][8],
+  bool enable_cross_attr)
 {
   static const uint8_t predMasks[19] = {255, 240, 204, 170, 192, 160, 136,
                                         3,   5,   15,  17,  51,  85,  10,
@@ -223,6 +244,9 @@ intraDcPred_decoder(
   int64_t neighValue[3];
   int64_t childNeighValue[3];
   int64_t intraChildNeighValue[3];
+
+  int64_t neighValue_ano[3];
+  int64_t childNeighValue_ano[3];
 
   const auto parentOnlyCheckMaxIdx =
     rahtPredParams.raht_subnode_prediction_enabled_flag ? 7 : 19;
@@ -252,12 +276,26 @@ intraDcPred_decoder(
       else
         neighValue[k] *= predWeightParent[i] << pcc::FixedPoint::kFracBits;
 
+	if (enable_cross_attr) {
+      auto neighValueIt_ano =
+        std::next(first_ano, numAttrs * parentNeighIdx[i]);
+      for (int k = 0; k < numAttrs; k++)
+        neighValue_ano[k] = *neighValueIt_ano++;
+      for (int k = 0; k < numAttrs; k++)
+        if (rahtExtension)
+          neighValue_ano[k] *= predWeightParent[i];
+        else
+          neighValue_ano[k] *= predWeightParent[i] << pcc::FixedPoint::kFracBits;
+    }
+
     int mask = predMasks[i] & occupancy;
     for (int j = 0; mask; j++, mask >>= 1) {
       if (mask & 1) {
         weightSum[j] += predWeightParent[i];
         for (int k = 0; k < numAttrs; k++) {
           predBuf[k][j].val += neighValue[k];
+          if (enable_cross_attr)
+            predBuf_ano[k][j].val += neighValue_ano[k];
         }
       }
     }
@@ -282,6 +320,18 @@ intraDcPred_decoder(
         else
           neighValue[k] *= predWeightParent[7 + i] << pcc::FixedPoint::kFracBits;
 
+	  if (enable_cross_attr) {
+        auto neighValueIt_ano =
+          std::next(first_ano, numAttrs * parentNeighIdx[7 + i]);
+        for (int k = 0; k < numAttrs; k++)
+          neighValue_ano[k] = *neighValueIt_ano++;
+        for (int k = 0; k < numAttrs; k++)
+          if (rahtExtension)
+            neighValue_ano[k] *= predWeightParent[7 + i];
+          else
+            neighValue_ano[k] *= predWeightParent[7 + i] << pcc::FixedPoint::kFracBits;
+      }
+
       int mask = predMasks[7 + i] & occupancy;
       for (int j = 0; mask; j++, mask >>= 1) {
         if (mask & 1) {
@@ -300,10 +350,23 @@ intraDcPred_decoder(
             for (int k = 0; k < numAttrs; k++)
               predBuf[k][j].val += childNeighValue[k];
 
+			if (enable_cross_attr) {
+              auto childNeighValueIt_ano =
+                std::next(firstChild_ano, numAttrs * childNeighIdx[i][j]);
+              for (int k = 0; k < numAttrs; k++)
+                if (rahtExtension)
+                  childNeighValue_ano[k] = (*childNeighValueIt_ano++) * predWeightChild[i];
+                else
+                  childNeighValue_ano[k] = (*childNeighValueIt_ano++) * (predWeightChild[i] << pcc::FixedPoint::kFracBits);
+              for (int k = 0; k < numAttrs; k++)
+                predBuf_ano[k][j].val += childNeighValue_ano[k];
+            }
           } else {
             weightSum[j] += predWeightParent[7 + i];
             for (int k = 0; k < numAttrs; k++) {
               predBuf[k][j].val += neighValue[k];
+              if (enable_cross_attr)
+                predBuf_ano[k][j].val += neighValue_ano[k];
             }
           }
         }
@@ -318,6 +381,8 @@ intraDcPred_decoder(
       div.val = kDivisors[weightSum[i]];
       for (int k = 0; k < numAttrs; k++) {
         predBuf[k][i] *= div;
+		if (enable_cross_attr)
+          predBuf_ano[k][i] *= div;
       }
       if (haarFlag) {
         for (int k = 0; k < numAttrs; k++) {
@@ -342,7 +407,8 @@ uraht_process_decoder(
   int* attributes,
   int32_t* coeffBufIt,
   AttributeInterPredParams& attrInterPredParams,
-  ModeCoder& coder)
+  ModeCoder& coder,
+  int* attributes_another)
 {
   // coefficients are stored in three planar arrays.  coeffBufItK is a set
   // of iterators to each array.
@@ -360,6 +426,10 @@ uraht_process_decoder(
     }
     return;
   }
+
+  bool enable_Cross_attr = numAttrs == 1 && !haarFlag;
+
+  int depthLimitCrossAttr = 8;
 
   bool enableLCPPred = rahtPredParams.raht_last_component_prediction_enabled_flag;
 
@@ -398,6 +468,11 @@ uraht_process_decoder(
     node.qp = {
 		int16_t(pointQpOffsets[i][0] << regionQpShift),
         int16_t(pointQpOffsets[i][1] << regionQpShift)};
+    for (int k = 0; k < numAttrs; k++) {
+      if (enable_Cross_attr) {
+        node.sumAttr_another[k] = attributes_another[i * numAttrs + k];
+      }
+    }
     weightsLf->emplace_back(node);
   }
 
@@ -427,7 +502,7 @@ uraht_process_decoder(
   // ascend tree
   int numNodes = weightsLf->size();
   // process any duplicate points
-  numNodes = reduceUnique_decoder(numNodes, weightsLf, &weightsHf);
+  numNodes = reduceUnique_decoder<haarFlag, numAttrs>(numNodes, weightsLf, &weightsHf);
   weightsLfStack[0].resize(numNodes);//shrink
 
   const bool flagNoDuplicate = weightsHf.size() == 0;
@@ -440,8 +515,8 @@ uraht_process_decoder(
     weightsLf = &weightsLfStack.back();
 
     auto weightsLfRefold = &weightsLfStack[weightsLfStack.size() - 2];
-    numNodes =
-      reduceDepthDecoder(levelD, numNodes, weightsLfRefold, weightsLf);
+    numNodes = reduceDepthDecoder<haarFlag, numAttrs>(
+      levelD, numNodes, weightsLfRefold, weightsLf);
     numDepth++;
   }
 
@@ -473,6 +548,12 @@ uraht_process_decoder(
   attrRec.resize(numPoints * numAttrs);
   attrRecParent.resize(numPoints * numAttrs);
 
+  std::vector<int32_t> attrRec_ano, attrRecParent_ano;
+  if (enable_Cross_attr) {
+    attrRec_ano.resize(numPoints * numAttrs);
+    attrRecParent_ano.resize(numPoints * numAttrs);
+  }
+
   std::vector<int64_t> attrRecUs, attrRecParentUs;
   attrRecUs.resize(numPoints * numAttrs);
   attrRecParentUs.resize(numPoints * numAttrs);
@@ -494,6 +575,8 @@ uraht_process_decoder(
   int8_t LcpCoeff = 0;
   int filterIdx = 0;
 
+  int8_t Cross_Coeff = 0;
+
   // ----------------------------------- descend tree, loop on depth ------------------------------------
   for (int levelD = numDepth, levelD_ref = numDepth_ref, isFirst = 1; levelD > 0; /*nop*/) {
     std::vector<UrahtNode>& weightsParent = weightsLfStack[levelD];
@@ -503,6 +586,9 @@ uraht_process_decoder(
     
 	levelD--;
     int level = 3 * levelD;
+
+	if (levelD < numDepth - depthLimitCrossAttr)
+      enable_Cross_attr = 0;
 
     if (levelD_ref <= 0) {
       enableACInterPred = false;
@@ -565,6 +651,9 @@ uraht_process_decoder(
     LcpCoeff = 0;
     PCCRAHTComputeLCP curlevelLcp;
 
+	Cross_Coeff = 0;
+    PCCRAHTComputeLCP curlevelLcp_Cross;
+
 	//--------------- initialize parent node information for current level ------------
     if (enablePredictionInLvl) {
       for (auto& ele : weightsParent)
@@ -583,6 +672,9 @@ uraht_process_decoder(
     auto attrRecParentUsIt = attrRecParentUs.cbegin();
     auto attrRecParentIt = attrRecParent.cbegin();
     auto numGrandParentNeighIt = numGrandParentNeigh.cbegin();
+
+	if (enable_Cross_attr)
+      std::swap(attrRec_ano, attrRecParent_ano);
     
 	//---------------- get inter filter of current level ---------------------
     int64_t interFilterTap = 128;
@@ -627,6 +719,12 @@ uraht_process_decoder(
       FixedPoint NodeRecBuf[3][8] = {0};
       FixedPoint normalizedSqrtBuf[8] = {0};
 
+	  FixedPoint Sample_Another_PredBuf[3][8] = {0}, transform_Another_PredBuf[3][8] = {0};
+
+	  FixedPoint Sample_Another_Intra_PredBuf[3][8] = {0}, transform_Another_Intra_PredBuf[3][8] = {0}; 
+
+      int64_t CoeffRecBuf_cross[8][3] = {0};
+
 	  // For Lcp prediction
 	  int64_t CoeffRecBuf[8][3] = {0};     
       FixedPoint transformResidueRecBuf[3] = {0};
@@ -652,6 +750,12 @@ uraht_process_decoder(
 
 		if (rahtExtension)
 		  nodeCnt++;
+
+		if (enable_Cross_attr) {
+		  for (int k = 0; k < numAttrs; k++) {         
+            Sample_Another_PredBuf[k][nodeIdx] = it->sumAttr_another[k];
+          }
+        }
       }
 
       if (!inheritDc) {
@@ -793,8 +897,9 @@ uraht_process_decoder(
           int64_t limitHigh = 0;
           intraDcPred_decoder<haarFlag, numAttrs, rahtExtension>(
             parentNeighIdx, childNeighIdx, occupancy,
-            attrRecParent.begin(), attrRec.begin(),
-            SamplePredBuf, rahtPredParams, limitLow, limitHigh);
+            attrRecParent.begin(), attrRec.begin(), SamplePredBuf, rahtPredParams, limitLow,
+            limitHigh, attrRecParent_ano.begin(), attrRec_ano.begin(),
+            Sample_Another_Intra_PredBuf, enable_Cross_attr);
         }
 
         for (int j = i, nodeIdx = 0; nodeIdx < 8; nodeIdx++) {
@@ -871,12 +976,27 @@ uraht_process_decoder(
           if (weights[childIdx] <= 1)
             continue;
           
+		  if (enable_Cross_attr) {
+            FixedPoint rsqrtWeight;
+            uint64_t w = weights[childIdx];
+            int shift = 5 * ((w > 1024) + (w > 1048576));
+            rsqrtWeight.val = fastIrsqrt(w) >> (40 - shift - FixedPoint::kFracBits);         
+		    for (int k = 0; k < numAttrs; k++) {                       
+              Sample_Another_PredBuf[k][childIdx].val >>= shift;
+              Sample_Another_PredBuf[k][childIdx] *= rsqrtWeight;
+            }
+		  }
           // Predicted attribute values
           FixedPoint sqrtWeight;
           if (enablePrediction) {
             sqrtWeight.val = fastIsqrt(weights[childIdx]);
             for (int k = 0; k < numAttrs; k++) {
               SamplePredBuf[k][childIdx] *= sqrtWeight;
+            }
+            if (enable_Cross_attr) {
+              for (int k = 0; k < numAttrs; k++) {
+                Sample_Another_Intra_PredBuf[k][childIdx] *= sqrtWeight;
+              }
             }
           }
         }
@@ -904,6 +1024,16 @@ uraht_process_decoder(
             }
           }
         }
+
+		if (enable_Cross_attr) {
+          std::copy_n(&Sample_Another_PredBuf[0][0], numAttrs * 8, &transform_Another_PredBuf[0][0]);
+          fwdTransformBlock222<RahtKernel>(numAttrs, transform_Another_PredBuf, weights);
+
+		  if (enablePrediction) {
+			std::copy_n(&Sample_Another_Intra_PredBuf[0][0], numAttrs * 8, &transform_Another_Intra_PredBuf[0][0]);
+            fwdTransformBlock222<RahtKernel>(numAttrs, transform_Another_Intra_PredBuf, weights);
+          }
+		}
       }
         
       //compute DC of the predictions: Done in the same way at the encoder and decoder to avoid drifting
@@ -932,6 +1062,7 @@ uraht_process_decoder(
       
       //flags for skiptransform
       bool skipTransform = enablePrediction;
+	  bool enable_Cross_attr_strict = enable_Cross_attr && inheritDc;
       
       // per-coefficient operations:
       //  - subtract transform domain prediction (encoder)
@@ -942,6 +1073,12 @@ uraht_process_decoder(
         // skip the DC coefficient unless at the root of the tree
         if (inheritDc && !idx)
           return;
+
+		if (enable_Cross_attr_strict) {
+          for (int k = 0; k < numAttrs; k++) {
+            transform_Another_PredBuf[k][idx] -= transform_Another_Intra_PredBuf[k][idx];
+          }
+        }
 
         // Check if QP offset is to be applied to AC coeffiecients
         Qps coeffQPOffset = (acCoeffQpLayer <= maxAcCoeffQpOffsetLayers && idx)
@@ -974,7 +1111,16 @@ uraht_process_decoder(
             }
           } 
 		  else {
+            if (enable_Cross_attr_strict) {
+              transformResidueRecBuf[k].val +=
+                Cross_Coeff * transform_Another_PredBuf[k][idx].val >> 4;
+            }
             transformPredBuf[k][idx] += transformResidueRecBuf[k];
+			if (enable_Cross_attr) {
+              CoeffRecBuf[nodelvlSum][k] = transformResidueRecBuf[k].round();
+              CoeffRecBuf_cross[nodelvlSum][k] =
+                transform_Another_PredBuf[k][idx].round();
+            }
             NodeRecBuf[k][idx] = transformResidueRecBuf[k];
           }
           skipTransform = skipTransform && (NodeRecBuf[k][idx].val == 0);          
@@ -985,6 +1131,10 @@ uraht_process_decoder(
       // compute last component coefficient
       if (numAttrs == 3 && nodeCnt > 1 && !haarFlag && inheritDc && enableLCPPred) {
         LcpCoeff = curlevelLcp.computeLCPCoeff(nodelvlSum, CoeffRecBuf);
+      }
+
+      if (nodeCnt > 1 && enable_Cross_attr && inheritDc) {
+        Cross_Coeff = curlevelLcp_Cross.compute_Cross_Attr_Coeff(nodelvlSum, CoeffRecBuf, CoeffRecBuf_cross);
       }
       
       if(haarFlag){
@@ -1056,6 +1206,10 @@ uraht_process_decoder(
             for (int k = 0; k < numAttrs; k++) {
               NodeRecBuf[k][nodeIdx].val >>= shift;
               NodeRecBuf[k][nodeIdx] *= rsqrtWeight;
+			  if (enable_Cross_attr) {
+                Sample_Another_PredBuf[k][nodeIdx].val >>= shift;
+                Sample_Another_PredBuf[k][nodeIdx] *= rsqrtWeight;
+              }
             }
           }
         }
@@ -1064,6 +1218,11 @@ uraht_process_decoder(
           attrRec[j * numAttrs + k] = rahtExtension
               ? NodeRecBuf[k][nodeIdx].val
             : NodeRecBuf[k][nodeIdx].round();
+		  if (enable_Cross_attr) {
+            attrRec_ano[j * numAttrs + k] = rahtExtension
+              ? Sample_Another_PredBuf[k][nodeIdx].val
+              : Sample_Another_PredBuf[k][nodeIdx].round();
+          }
         }
         j++;
       }      
@@ -1194,7 +1353,8 @@ regionAdaptiveHierarchicalInverseTransform(
   int* coefficients,
   const bool rahtExtension,
   AttributeInterPredParams& attrInterPredParams,
-  ModeDecoder& decoder)
+  ModeDecoder& decoder,
+  int* attributes_another)
 {
   switch (attribCount) {
   case 3:
@@ -1202,20 +1362,20 @@ regionAdaptiveHierarchicalInverseTransform(
       if (rahtExtension)
         uraht_process_decoder<true, 3, true>(
           rahtPredParams, qpset, pointQpOffsets, voxelCount, mortonCode,
-          attributes, coefficients, attrInterPredParams, decoder);
+          attributes, coefficients, attrInterPredParams, decoder, attributes_another);
       else
         uraht_process_decoder<true, 3, false>(
           rahtPredParams, qpset, pointQpOffsets, voxelCount, mortonCode,
-          attributes, coefficients, attrInterPredParams, decoder);
+          attributes, coefficients, attrInterPredParams, decoder, attributes_another);
     } else {
       if (rahtExtension)
         uraht_process_decoder<false, 3, true>(
           rahtPredParams, qpset, pointQpOffsets, voxelCount, mortonCode,
-          attributes, coefficients, attrInterPredParams, decoder);
+          attributes, coefficients, attrInterPredParams, decoder, attributes_another);
       else
         uraht_process_decoder<false, 3, false>(
           rahtPredParams, qpset, pointQpOffsets, voxelCount, mortonCode,
-          attributes, coefficients, attrInterPredParams, decoder);
+          attributes, coefficients, attrInterPredParams, decoder, attributes_another);
     }
     break;
 
@@ -1224,20 +1384,20 @@ regionAdaptiveHierarchicalInverseTransform(
       if (rahtExtension)
         uraht_process_decoder<true, 1, true>(
           rahtPredParams, qpset, pointQpOffsets, voxelCount, mortonCode,
-          attributes, coefficients, attrInterPredParams, decoder);
+          attributes, coefficients, attrInterPredParams, decoder, attributes_another);
       else
         uraht_process_decoder<true, 1, false>(
           rahtPredParams, qpset, pointQpOffsets, voxelCount, mortonCode,
-          attributes, coefficients, attrInterPredParams, decoder);
+          attributes, coefficients, attrInterPredParams, decoder, attributes_another);
     } else {
       if (rahtExtension)
         uraht_process_decoder<false, 1, true>(
           rahtPredParams, qpset, pointQpOffsets, voxelCount, mortonCode,
-          attributes, coefficients, attrInterPredParams, decoder);
+          attributes, coefficients, attrInterPredParams, decoder, attributes_another);
       else
         uraht_process_decoder<false, 1, false>(
           rahtPredParams, qpset, pointQpOffsets, voxelCount, mortonCode,
-          attributes, coefficients, attrInterPredParams, decoder);
+          attributes, coefficients, attrInterPredParams, decoder, attributes_another);
     }
     break;
   default: throw std::runtime_error("attribCount only support 1 or 3");
