@@ -1367,7 +1367,7 @@ uraht_process_encoder(
 		  Sample_Another_Resi_PredBuf_temp[idx].val = Sample_Another_PredBuf[idx].val - Sample_Another_Intra_PredBuf[idx].val;
           Sample_Another_Resi_PredBuf[idx].val = Sample_Another_Resi_PredBuf_temp[idx].val * Cross_Coeff >> 5;
 
-	      SamplePredBuf[0][idx].val += Sample_Another_Resi_PredBuf[idx].val;
+	      //SamplePredBuf[0][idx].val += Sample_Another_Resi_PredBuf[idx].val;
         }
       }
 
@@ -1391,7 +1391,7 @@ uraht_process_encoder(
         }        
       }
       else {
-        if (enablePrediction || enable_Cross_attr_strict) {
+        if (enablePrediction /*|| enable_Cross_attr_strict*/) {
           std::copy_n(&SampleBuf[0][0], 2 * numAttrs * 8, &transformBuf[0][0]);
           fwdTransformBlock222<RahtKernel>(2 * numAttrs, transformBuf, weights);
         }
@@ -1431,7 +1431,7 @@ uraht_process_encoder(
       }
       if (curLevelEnableACIntraPred)
       {
-        if (enable_Cross_attr_strict) {
+/*        if (enable_Cross_attr_strict) {
           for (int idx = 0; idx < 8; idx++) {
             if (!weights[idx])
               continue;
@@ -1440,7 +1440,7 @@ uraht_process_encoder(
           }
           std::copy_n(&Sample_Another_NonPredBuf[0], 8 , &transform_Another_NonPredBuf[0]);
           fwdTransformBlock222<RahtKernel>(1, &transform_Another_NonPredBuf, weights);
-		} 
+		}*/ 
 
          std::copy_n(&transformBuf[0][0], 8 * numAttrs, &origsamples[0][0]);
          std::copy_n(&transformBuf[0][0], 8 * numAttrs, &transformNonPredBuf[0][0]);
@@ -1448,7 +1448,7 @@ uraht_process_encoder(
       }
         
       //compute DC of the predictions: Done in the same way at the encoder and decoder to avoid drifting
-      if((enablePrediction || enableIntraPrediction || enable_Cross_attr_strict) && !haarFlag){
+      if((enablePrediction || enableIntraPrediction /*|| enable_Cross_attr_strict*/) && !haarFlag){
         FixedPoint rsqrtweightsum;
         rsqrtweightsum.val = fastIrsqrt(sumWeights_cur);
         for (int childIdx = 0; childIdx < 8; childIdx++) {
@@ -1471,19 +1471,19 @@ uraht_process_encoder(
               prod.val = normalizedsqrtweight.val; prod *= SampleIntraPredBuf[k][childIdx];
               PredAllIntraDC[k].val += prod.val;
 			}
-            if (enable_Cross_attr_strict && k == 0 && curLevelEnableACIntraPred) {
-                prod.val = normalizedsqrtweight.val;
-                prod *= Sample_Another_NonPredBuf[childIdx];
-                PredDC_cross_nonPred.val += prod.val;
-            }
+            //if (enable_Cross_attr_strict && k == 0 && curLevelEnableACIntraPred) {
+            //    prod.val = normalizedsqrtweight.val;
+            //    prod *= Sample_Another_NonPredBuf[childIdx];
+            //    PredDC_cross_nonPred.val += prod.val;
+            //}
           }       
         }
       }
       
       //flags for skiptransform
-      bool skipTransform = enablePrediction || enable_Cross_attr_strict;
+      bool skipTransform = enablePrediction /*|| enable_Cross_attr_strict*/;
 	  bool skipAllIntraTransform = enableIntraPrediction;
-	  bool skipNonPredTransform = enable_Cross_attr_strict;    
+	  //bool skipNonPredTransform = enable_Cross_attr_strict;    
 
       // per-coefficient operations:
       //  - subtract transform domain prediction (encoder)
@@ -1495,17 +1495,17 @@ uraht_process_encoder(
         if (inheritDc && !idx)
           return;
 
-        if (enablePrediction || enable_Cross_attr_strict) {
+        if (enablePrediction /*|| enable_Cross_attr_strict*/) {
           // subtract transformed prediction (skipping DC)
           for (int k = 0; k < numAttrs; k++) {
             transformBuf[k][idx] -= transformPredBuf[k][idx];
           }
         }
 
-        if (enable_Cross_attr_strict && curLevelEnableACIntraPred) {
-          transformNonPredBuf[0][idx] -= transform_Another_NonPredBuf[idx];
+        //if (enable_Cross_attr_strict && curLevelEnableACIntraPred) {
+        //  transformNonPredBuf[0][idx] -= transform_Another_NonPredBuf[idx];
 
-        }
+        //}
 
         if (enableIntraPrediction) {
           for (int k = 0; k < numAttrs; k++) {
@@ -1835,7 +1835,7 @@ uraht_process_encoder(
             int64_t idistnonPred = (iresidueNonPred) * (iresidueNonPred);
             distnonPred += (double)idistnonPred;
 
-            skipNonPredTransform = skipNonPredTransform && (NodeNonPredRecBuf[k][idx].val == 0);
+            //skipNonPredTransform = skipNonPredTransform && (NodeNonPredRecBuf[k][idx].val == 0);
           }
         }
         nodelvlSum++;
@@ -1880,9 +1880,9 @@ uraht_process_encoder(
           }
           if (curLevelEnableACIntraPred) {
             ///< inherit the parent DC coefficients
-            if (enable_Cross_attr_strict && k == 0)
-              NodeNonPredRecBuf[0][0].val = val - PredDC_cross_nonPred.val;
-            else
+            //if (enable_Cross_attr_strict && k == 0)
+            //  NodeNonPredRecBuf[0][0].val = val - PredDC_cross_nonPred.val;
+            //else
               NodeNonPredRecBuf[k][0].val = val;
           }
         }
@@ -1936,26 +1936,26 @@ uraht_process_encoder(
           }  
         }
         if (curLevelEnableACIntraPred){
-          if (skipNonPredTransform) {
-            FixedPoint DCerror[3];
-            for (int k = 0; k < numAttrs; k++) {
-              DCerror[k] = NodeNonPredRecBuf[k][0];
-              NodeNonPredRecBuf[k][0].val = 0;
-            }
-            for (int cidx = 0; cidx < 8; cidx++) {
-              if (!weights[cidx])
-                continue;
+          //if (skipNonPredTransform) {
+          //  FixedPoint DCerror[3];
+          //  for (int k = 0; k < numAttrs; k++) {
+          //    DCerror[k] = NodeNonPredRecBuf[k][0];
+          //    NodeNonPredRecBuf[k][0].val = 0;
+          //  }
+          //  for (int cidx = 0; cidx < 8; cidx++) {
+          //    if (!weights[cidx])
+          //      continue;
 
-              for (int k = 0; k < numAttrs; k++) {
-                FixedPoint Correctionterm = normalizedSqrtBuf[cidx];
-                Correctionterm *= DCerror[k];
-                NodeNonPredRecBuf[k][cidx] = Correctionterm;
-              }
-            }
-          } else {
+          //    for (int k = 0; k < numAttrs; k++) {
+          //      FixedPoint Correctionterm = normalizedSqrtBuf[cidx];
+          //      Correctionterm *= DCerror[k];
+          //      NodeNonPredRecBuf[k][cidx] = Correctionterm;
+          //    }
+          //  }
+          //} else 
             invTransformBlock222<RahtKernel>(
               numAttrs, NodeNonPredRecBuf, weights);
-          } 
+           
         }
       }
 
@@ -1972,7 +1972,7 @@ uraht_process_encoder(
               NodeRecBuf[k][nodeIdx].val += SamplePredBuf[k][nodeIdx].val;
               if (enable_Cross_attr_strict && k == 0) {
                 if (enablePrediction) {
-                  cur.val = temp.val + Sample_Another_Resi_PredBuf[nodeIdx].val;
+                  cur.val = temp.val /*+ Sample_Another_Resi_PredBuf[nodeIdx].val*/;
                   attrUsRecBuf_cross[node_cross] = cur.round();
                   ano.val = Sample_Another_Resi_PredBuf_temp[nodeIdx].val;
                   attrUsRecBuf_cross_another[node_cross] = ano.round();
@@ -1993,11 +1993,11 @@ uraht_process_encoder(
             }
             if (curLevelEnableACIntraPred) {
 
-              if (enable_Cross_attr_strict && k == 0) {
-				NodeNonPredRecBuf[0][nodeIdx].val += Sample_Another_NonPredBuf[nodeIdx].val;
-				nonPredAttrUsRecBuf_cross[node_cross] = NodeNonPredRecBuf[0][nodeIdx].round();
-				nonPredAttrUsRecBuf_cross_another[node_cross] = Sample_Another_PredBuf[nodeIdx].round();
-              }
+    //          if (enable_Cross_attr_strict && k == 0) {
+				//NodeNonPredRecBuf[0][nodeIdx].val += Sample_Another_NonPredBuf[nodeIdx].val;
+				//nonPredAttrUsRecBuf_cross[node_cross] = NodeNonPredRecBuf[0][nodeIdx].round();
+				//nonPredAttrUsRecBuf_cross_another[node_cross] = Sample_Another_PredBuf[nodeIdx].round();
+    //          }
               nonPredAttrRecUs[j * numAttrs + k] =
                 NodeNonPredRecBuf[k][nodeIdx].val;
             }
