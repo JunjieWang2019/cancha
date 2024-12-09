@@ -224,7 +224,8 @@ intraDcPred(
   It first_ano,
   It firstChild_ano,
   FixedPoint predBuf_ano[8],
-  bool enable_cross_attr)
+  bool enable_cross_attr,
+  FixedPoint ano[8])
 {
   static const uint8_t predMasks[19] = {255, 240, 204, 170, 192, 160, 136,
                                         3,   5,   15,  17,  51,  85,  10,
@@ -241,8 +242,11 @@ intraDcPred(
     728,   712,   697,   683,  669,  655,  643,  630,  618,  607,  596,
     585,   575,   565,   555,  546,  537,  529,  520,  512};
 
-  int weightSum[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
+  int weightSum[3][8];
 
+  for (int k = 0; k < 3; k++)
+    for (int idx = 0; idx < 8; idx++)
+      weightSum[k][idx] = -1;
   
   int64_t neighValue[3];
   int64_t childNeighValue[3];
@@ -250,6 +254,27 @@ intraDcPred(
 
   int64_t neighValue_ano;
   int64_t childNeighValue_ano;
+
+
+  double th1 = 0.1;
+  int wAdd1 = 4;
+
+  double th2 = 0.2;
+  int wAdd2 = 3;
+
+  double th3 = 0.3;
+  int wAdd3 = 2;
+
+  double th4 = 0.4;
+  int wAdd4 = 1;
+
+  double th5 = 0.6;
+  int wAdd5 = -1;
+
+  double th6 = 1.0;
+  int wAdd6 = -2;
+
+  int wAdd7 = -3;
 
   const auto parentOnlyCheckMaxIdx =
     rahtPredParams.raht_subnode_prediction_enabled_flag ? 7 : 19;
@@ -272,6 +297,11 @@ intraDcPred(
       limitHigh = ratioThreshold2 * neighValue[0];
     }
 
+	if (enable_cross_attr) {
+      auto neighValueIt_ano = std::next(first_ano, parentNeighIdx[i]);
+      neighValue_ano = *neighValueIt_ano++;
+    }
+
     // apply weighted neighbour value to masked positions
     for (int k = 0; k < numAttrs; k++)
       if (rahtExtension)
@@ -279,28 +309,59 @@ intraDcPred(
       else
         neighValue[k] *= predWeightParent[i] << pcc::FixedPoint::kFracBits;
 
-	if (enable_cross_attr) {
-      auto neighValueIt_ano =
-        std::next(first_ano, parentNeighIdx[i]);
-        neighValue_ano = *neighValueIt_ano++;
-
-      if (rahtExtension)
-        neighValue_ano *= predWeightParent[i];
-      else
-        neighValue_ano *= predWeightParent[i] << pcc::FixedPoint::kFracBits;
-    }
+	int64_t temp;
+    int w = 0;
+    if (enable_cross_attr)
+	  temp = neighValue[0] / predWeightParent[i];
 
     int mask = predMasks[i] & occupancy;
     for (int j = 0; mask; j++, mask >>= 1) {
       if (mask & 1) {
-        weightSum[j] += predWeightParent[i];
+        if (enable_cross_attr) {
+          double error = abs(neighValue_ano - ano[j].val) / (1.0 * ano[j].val);
+          if (error < th1) {
+            w = wAdd1;
+          } 
+		  else if (error < th2) {
+            w = wAdd2;
+          } 
+		  else if (error < th3) {
+            w = wAdd3;
+          } 
+		  else if (error < th4) {
+            w = wAdd4;
+          } 
+		  else if (error < th5) {
+            w = wAdd5;
+          } 
+		  else if (error < th6) {
+			if (predWeightParent[i] == 1)	
+              w = wAdd5; // -1
+			else
+			  w = wAdd6; // -2
+          } 
+		  else {
+            if (predWeightParent[i] == 1)
+              w = wAdd5;  // -1
+            else if (predWeightParent[i] == 2)
+              w = wAdd6;  // -2
+            else
+              w = wAdd7;  // -3          
+		  }
+        }
+        weightSum[0][j] += predWeightParent[i];
+        weightSum[1][j] += predWeightParent[i];
+        weightSum[2][j] += predWeightParent[i];
+
         for (int k = 0; k < numAttrs; k++) {
           predBuf[k][j].val += neighValue[k];
           if (enableACInterPred)
             intraPredBuf[k][j].val += neighValue[k];
         }
-        if (enable_cross_attr)
-          predBuf_ano[j].val += neighValue_ano;
+        if (enable_cross_attr) {
+          weightSum[0][j] += w;
+          predBuf[0][j].val += (temp * w);
+        }
       }
     }
   }
@@ -317,6 +378,11 @@ intraDcPred(
       if (10 * neighValue[0] <= limitLow || 10 * neighValue[0] >= limitHigh)
         continue;
 
+	  if (enable_cross_attr) {
+        auto neighValueIt_ano = std::next(first_ano, parentNeighIdx[7 + i]);
+        neighValue_ano = *neighValueIt_ano++;
+      }
+
       // apply weighted neighbour value to masked positions
       for (int k = 0; k < numAttrs; k++)
         if (rahtExtension)
@@ -324,23 +390,58 @@ intraDcPred(
         else
           neighValue[k] *= predWeightParent[7 + i] << pcc::FixedPoint::kFracBits;
 
-	  if (enable_cross_attr) {
-        auto neighValueIt_ano =
-          std::next(first_ano, parentNeighIdx[7 + i]);
-       
-        neighValue_ano = *neighValueIt_ano++;
-       
-        if (rahtExtension)
-          neighValue_ano *= predWeightParent[7 + i];
-        else
-          neighValue_ano *= predWeightParent[7 + i] << pcc::FixedPoint::kFracBits;
-      }
+	  int64_t temp;
+      int w = 0;
+      if (enable_cross_attr)
+	    temp = neighValue[0] / predWeightParent[7 + i];
 
       int mask = predMasks[7 + i] & occupancy;
       for (int j = 0; mask; j++, mask >>= 1) {
         if (mask & 1) {
           if (childNeighIdx[i][j] != -1) {
-            weightSum[j] += predWeightChild[i];
+
+			if (enable_cross_attr) {
+              auto childNeighValueIt_ano =
+                std::next(firstChild_ano, childNeighIdx[i][j]);
+			  childNeighValue_ano = *childNeighValueIt_ano++;
+
+              double error =
+                abs(childNeighValue_ano - ano[j].val) / (1.0 * ano[j].val);
+              if (error < th1) {
+                w = wAdd1;
+              } 
+		      else if (error < th2) {
+                w = wAdd2;
+              } 
+			  else if (error < th3) {
+                w = wAdd3;
+              } 
+			  else if (error < th4) {
+                w = wAdd4;
+              } 
+			  else if (error < th5) {
+                w = wAdd5;
+              } 
+			  else if (error < th6) {
+                if (predWeightChild[i] == 1)
+                  w = wAdd5;  // -1
+                else
+                  w = wAdd6;  // -2
+              } 
+			  else {
+                if (predWeightChild[i] == 1)
+                  w = wAdd5;  // -1
+                else if (predWeightChild[i] == 2)
+                  w = wAdd6;  // -2
+                else
+                  w = wAdd7;  // -3
+              }
+            }
+
+            weightSum[0][j] += predWeightChild[i];
+            weightSum[1][j] += predWeightChild[i];
+            weightSum[2][j] += predWeightChild[i];
+
             auto childNeighValueIt =
               std::next(firstChild, numAttrs * childNeighIdx[i][j]);
             for (int k = 0; k < numAttrs; k++)
@@ -354,16 +455,10 @@ intraDcPred(
             for (int k = 0; k < numAttrs; k++)
               predBuf[k][j].val += childNeighValue[k];
 
-			if (enable_cross_attr) {
-              auto childNeighValueIt_ano =
-                std::next(firstChild_ano, childNeighIdx[i][j]);
-             
-              if (rahtExtension)
-                childNeighValue_ano = (*childNeighValueIt_ano++) * predWeightChild[i];
-              else
-                childNeighValue_ano = (*childNeighValueIt_ano++) * (predWeightChild[i] << pcc::FixedPoint::kFracBits);
-              
-                predBuf_ano[j].val += childNeighValue_ano;
+            if (enable_cross_attr) {
+              temp = childNeighValue[0] / predWeightChild[i];
+              weightSum[0][j] += w;
+              predBuf[0][j].val += (temp * w);
             }
 
             if (enableACInterPred) {
@@ -380,14 +475,50 @@ intraDcPred(
                 intraPredBuf[k][j].val += intraChildNeighValue[k];
             }
           } else {
-            weightSum[j] += predWeightParent[7 + i];
+            if (enable_cross_attr) {
+              double error = abs(neighValue_ano - ano[j].val) / (1.0 * ano[j].val); 
+              if (error < th1) {
+                w = wAdd1;
+              } else if (error < th2) {
+                w = wAdd2;
+              } 
+			  else if (error < th3) {
+                w = wAdd3;
+              } 
+			  else if (error < th4) {
+                w = wAdd4;
+              } 
+			  else if (error < th5) {
+                w = wAdd5;
+              } 
+			  else if (error < th6) {
+                if (predWeightParent[7 + i] == 1)
+                  w = wAdd5;  // -1
+                else
+                  w = wAdd6;  // -2
+              } 
+			  else {
+                if (predWeightParent[7 + i] == 1)
+                  w = wAdd5;  // -1
+                else if (predWeightParent[7 + i] == 2)
+                  w = wAdd6;  // -2
+                else
+                  w = wAdd7;  // -3
+              }
+            }
+            weightSum[0][j] += predWeightParent[7 + i];
+            weightSum[1][j] += predWeightParent[7 + i];
+            weightSum[2][j] += predWeightParent[7 + i];
+
             for (int k = 0; k < numAttrs; k++) {
               predBuf[k][j].val += neighValue[k];
               if (enableACInterPred)
                 intraPredBuf[k][j].val += neighValue[k];
             }
-            if (enable_cross_attr)
-              predBuf_ano[j].val += neighValue_ano;     
+            if (enable_cross_attr) {
+              weightSum[0][j] += w;
+              predBuf[0][j].val += (temp * w);
+            }    
           }
         }
       }
@@ -395,17 +526,20 @@ intraDcPred(
   }
 
   // normalise
-  FixedPoint div;
+  FixedPoint div[3];
   for (int i = 0; i < 8; i++, occupancy >>= 1) {
     if (occupancy & 1) {
-      div.val = kDivisors[weightSum[i]];
+      div[0].val = kDivisors[weightSum[0][i]];
+      div[1].val = kDivisors[weightSum[1][i]];
+      div[2].val = kDivisors[weightSum[2][i]];
+
       for (int k = 0; k < numAttrs; k++) {
-        predBuf[k][i] *= div;
+        predBuf[k][i] *= div[k];
         if (enableACInterPred)
-          intraPredBuf[k][i] *= div;
+          intraPredBuf[k][i] *= div[k];
       }
       if (enable_cross_attr)
-        predBuf_ano[i] *= div;
+        predBuf_ano[i] *= div[0];
       if (haarFlag) {
         for (int k = 0; k < numAttrs; k++) {
           predBuf[k][i].val = (predBuf[k][i].val >> predBuf[k][i].kFracBits)
@@ -1057,6 +1191,8 @@ uraht_process_encoder(
       FixedPoint normalizedSqrtBuf[8] = {0};
 
 	  FixedPoint Sample_Another_PredBuf[8] = {0};
+      FixedPoint Sample_Another_PredBuf_average[8] = {0};
+
 	  FixedPoint Sample_Another_Intra_PredBuf[8] = {0};
 	  FixedPoint Sample_Another_Resi_PredBuf[8] = {0};
 
@@ -1115,8 +1251,10 @@ uraht_process_encoder(
         for (int k = 0; k < numAttrs; k++) {
           SampleBuf[k][nodeIdx] = it->sumAttr[k];       
         }      
-        if (enable_Cross_attr)
+        if (enable_Cross_attr) {
           Sample_Another_PredBuf[nodeIdx] = it->sumAttr_another;           
+          Sample_Another_PredBuf_average[nodeIdx] = it->sumAttr_another;           
+        }
       }
 
       if (!inheritDc) {
@@ -1245,11 +1383,34 @@ uraht_process_encoder(
         if (enablePrediction) {
           int64_t limitLow = 0;
           int64_t limitHigh = 0;
+
+          if (enable_Cross_attr) {
+			for (int childIdx = 0; childIdx < 8; childIdx++) {
+          
+			  if (weights[childIdx] <= 1)
+				continue;
+			  // Summed attribute values
+			  FixedPoint rsqrtWeight;
+			  uint64_t w = weights[childIdx];
+			  int shift = 5 * ((w > 1024) + (w > 1048576));
+			  rsqrtWeight.val = fastIrsqrt(w) >> (40 - shift - FixedPoint::kFracBits);
+			  
+			  Sample_Another_PredBuf_average[childIdx].val >>= shift;
+			  Sample_Another_PredBuf_average[childIdx] *= rsqrtWeight;
+
+			  Sample_Another_PredBuf_average[childIdx].val >>= shift;
+			  Sample_Another_PredBuf_average[childIdx] *= rsqrtWeight;
+			         			  
+			}
+		  }
+
           intraDcPred<haarFlag, numAttrs, rahtExtension>(
             parentNeighIdx, childNeighIdx, occupancy,
             attrRecParent.begin(), attrRec.begin(), intraAttrRec.begin(),
             SamplePredBuf, SampleIntraPredBuf, rahtPredParams, limitLow, limitHigh, curLevelEnableACInterPred, 
-			attrRecParent_ano.begin(), attrRec_ano.begin(), Sample_Another_Intra_PredBuf, enable_Cross_attr);
+			attrRecParent_ano.begin(),
+            attrRec_ano.begin(), Sample_Another_Intra_PredBuf,
+            enable_Cross_attr, Sample_Another_PredBuf_average);
         }
 
         for (int j = i, nodeIdx = 0; nodeIdx < 8; nodeIdx++) {

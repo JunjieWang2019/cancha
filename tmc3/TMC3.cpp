@@ -855,7 +855,7 @@ ParseParameters(int argc, char* argv[], Parameters& params)
     )
    
     ("attrMultiEncodedOrder",
-    params.encoder.sps.attr_multi_encoded_order,false,
+    params.encoder.sps.attr_multi_encoded_order,true,
     "Attribute encode order in multi-attribute sequences"
     "false:color then reflectance, true: reflectance then color"
     )
@@ -1551,7 +1551,7 @@ ParseParameters(int argc, char* argv[], Parameters& params)
     "skip initial layers for inter filtering in RAHT")
 
   ("rahtNumLayersOfCrossAttributePredictionMinus2",
-    params_attr.aps.num_layers_CAP_enabled_minus2, 9,
+    params_attr.aps.num_layers_CAP_enabled_minus2, 20,
     "first (N + 2) layers CAP enabled")
 
   // This section is just dedicated to attribute recolouring (encoder only).
