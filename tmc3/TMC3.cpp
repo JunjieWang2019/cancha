@@ -855,7 +855,7 @@ ParseParameters(int argc, char* argv[], Parameters& params)
     )
    
     ("attrMultiEncodedOrder",
-    params.encoder.sps.attr_multi_encoded_order,true,
+    params.encoder.sps.attr_multi_encoded_order,false,
     "Attribute encode order in multi-attribute sequences"
     "false:color then reflectance, true: reflectance then color"
     )
