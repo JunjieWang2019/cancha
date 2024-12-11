@@ -998,7 +998,7 @@ uraht_process_decoder(
             continue;
 		  Sample_Another_Resi_PredBuf_temp[idx].val = Sample_Another_PredBuf[idx].val - Sample_Another_Intra_PredBuf[idx].val;
           Sample_Another_Resi_PredBuf[idx].val = Sample_Another_Resi_PredBuf_temp[idx].val * Cross_Coeff >> 5;
-	      SamplePredBuf[0][idx].val += Sample_Another_Resi_PredBuf[idx].val;
+	      //SamplePredBuf[0][idx].val += Sample_Another_Resi_PredBuf[idx].val;
         }
       }
 
@@ -1027,7 +1027,7 @@ uraht_process_decoder(
       }
         
       //compute DC of the predictions: Done in the same way at the encoder and decoder to avoid drifting
-      if((enablePrediction || enable_Cross_attr_strict) && !haarFlag){
+      if((enablePrediction/* || enable_Cross_attr_strict*/) && !haarFlag){
         FixedPoint rsqrtweightsum;
         rsqrtweightsum.val = fastIrsqrt(sumWeights_cur);
         for (int childIdx = 0; childIdx < 8; childIdx++) {
@@ -1051,7 +1051,7 @@ uraht_process_decoder(
       }
       
       //flags for skiptransform
-      bool skipTransform = enablePrediction || enable_Cross_attr_strict;
+      bool skipTransform = enablePrediction/* || enable_Cross_attr_strict*/;
 
       // per-coefficient operations:
       //  - subtract transform domain prediction (encoder)
@@ -1162,7 +1162,7 @@ uraht_process_decoder(
               NodeRecBuf[k][nodeIdx].val += SamplePredBuf[k][nodeIdx].val;
               if (enable_Cross_attr_strict && k == 0) {
                 if (enablePrediction) {
-                  cur.val = temp.val + Sample_Another_Resi_PredBuf[nodeIdx].val;
+                  cur.val = temp.val/* + Sample_Another_Resi_PredBuf[nodeIdx].val*/;
                   attrUsRecBuf_cross[node_cross] = cur.round();
                   ano.val = Sample_Another_Resi_PredBuf_temp[nodeIdx].val;
                   attrUsRecBuf_cross_another[node_cross] = ano.round();
