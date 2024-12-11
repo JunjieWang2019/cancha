@@ -244,25 +244,67 @@ intraDcPred_decoder(
   int64_t neighValue_ano;
   int64_t childNeighValue_ano;
 
-  double th1 = 0.1;
-  int wAdd1 = 4;
+  double th1;
+  int wAdd1;
 
-  double th2 = 0.2;
-  int wAdd2 = 3;
+  double th2;
+  int wAdd2;
 
-  double th3 = 0.3;
-  int wAdd3 = 2;
+  double th3;
+  int wAdd3;
 
-  double th4 = 0.4;
-  int wAdd4 = 1;
+  double th4;
+  int wAdd4;
 
-  double th5 = 0.6;
-  int wAdd5 = -1;
+  double th5;
+  int wAdd5;
 
-  double th6 = 1.0;
-  int wAdd6 = -2;
+  double th6;
+  int wAdd6;
 
-  int wAdd7 = -3;
+  int wAdd7;
+
+  if (numAttrs == 1) {
+    th1 = 0.1;
+    wAdd1 = 4;
+
+    th2 = 0.2;
+    wAdd2 = 3;
+
+    th3 = 0.3;
+    wAdd3 = 2;
+
+    th4 = 0.4;
+    wAdd4 = 1;
+
+    th5 = 0.6;
+    wAdd5 = -1;
+
+    th6 = 1.0;
+    wAdd6 = -2;
+
+    wAdd7 = -3;
+  } else {
+    th1 = 0.1;
+    wAdd1 = 3;
+
+    th2 = 0.2;
+    wAdd2 = 0;
+
+    th3 = 0.2;
+    wAdd3 = -1;
+
+    th4 = 0.2;
+    wAdd4 = -1;
+
+    th5 = 0.2;
+    wAdd5 = -1;
+
+    th6 = 0.2;
+    wAdd6 = -2;
+
+    wAdd7 = -2;
+  }
 
   const auto parentOnlyCheckMaxIdx =
     rahtPredParams.raht_subnode_prediction_enabled_flag ? 7 : 19;
